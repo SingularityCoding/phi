@@ -1,5 +1,5 @@
-from phi.ui import run
+from phi.cli import app
 
 
 def main() -> None:
-    run()
+    app()

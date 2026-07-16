@@ -8,6 +8,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "textual>=8.2.8",
+    "typer>=0.27.0",
 ]
 
 [project.scripts]
