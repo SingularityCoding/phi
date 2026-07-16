@@ -1,2 +1,5 @@
+from phi.ui import run
+
+
 def main() -> None:
-    print("Hello from phi!")
+    run()
