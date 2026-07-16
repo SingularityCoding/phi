@@ -12,3 +12,8 @@ wheels/
 # Test / coverage artifacts
 .coverage
 .pytest_cache/
+
+# Environment variables
+.env
+.env.*
+!.env.example
