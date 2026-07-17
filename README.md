@@ -69,7 +69,7 @@ capabilities:
 ## Project guide
 
 - [Architecture](docs/architecture.md) — system layers, dependency direction, and target package map
-- [Design specifications](docs/README.md) — the detailed contract for each capability
+- [System design](docs/README.md) — the detailed contract for each capability
 - [Roadmap](docs/roadmap.md) — v1 scope, implementation sequence, and completion criteria
 - [Project glossary](CONTEXT.md) — the canonical language used across Phi
 - [Course site prototype](docs/course/index.md) — an early teaching surface derived from the design

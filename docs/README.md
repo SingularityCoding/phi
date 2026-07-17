@@ -9,25 +9,26 @@ claims.
 - [`architecture.md`](architecture.md) — system layers, target `src/phi` layout, and dependencies
 - [`roadmap.md`](roadmap.md) — v1 scope, current status, and implementation order
 - [`deferred.md`](deferred.md) — capabilities deliberately deferred from v1
+- [`references.md`](references.md) — design sources, comparisons, and attribution boundaries
 - [`../CONTEXT.md`](../CONTEXT.md) — canonical project vocabulary
 
-## Capability specifications
+## System design
 
-- [`specs/model.md`](specs/model.md) — Model protocol and OpenAI-compatible gateway
-- [`specs/run-loop.md`](specs/run-loop.md) — bounded Run, streaming, Events, and Hooks
-- [`specs/tools-and-safety.md`](specs/tools-and-safety.md) — tool runtime, approvals, Environment,
+- [`design/model.md`](design/model.md) — Model protocol and OpenAI-compatible gateway
+- [`design/run-loop.md`](design/run-loop.md) — bounded Run, streaming, Events, and Hooks
+- [`design/tools-and-safety.md`](design/tools-and-safety.md) — tool runtime, approvals, Environment,
   and built-ins
-- [`specs/sessions-and-context.md`](specs/sessions-and-context.md) — entries, session tree,
+- [`design/sessions-and-context.md`](design/sessions-and-context.md) — entries, session tree,
   Context, instructions, and compaction
-- [`specs/skills.md`](specs/skills.md) — Skill discovery and invocation
-- [`specs/mcp.md`](specs/mcp.md) — MCP integration
-- [`specs/agents.md`](specs/agents.md) — delegation and Subagents
-- [`specs/hosts.md`](specs/hosts.md) — CLI, TUI, slash commands, and interaction behavior
+- [`design/skills.md`](design/skills.md) — Skill discovery and invocation
+- [`design/mcp.md`](design/mcp.md) — MCP integration
+- [`design/agents.md`](design/agents.md) — delegation and Subagents
+- [`design/hosts.md`](design/hosts.md) — CLI, TUI, slash commands, and interaction behavior
 
 ## Historical input
 
-- [`course-design.md`](course-design.md) is an early course-first draft and is not an engineering
-  specification.
+- [`course-design.md`](course-design.md) is an early course-first draft and is not current
+  engineering-design authority.
 
 ## Course site
 

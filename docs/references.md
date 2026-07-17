@@ -2,11 +2,11 @@
 
 Phi is an original implementation, but its design was informed by existing Agent Harnesses,
 product documentation, open protocols, and framework APIs. This document preserves that research
-provenance independently of the current specifications.
+provenance independently of the current system-design documents.
 
 Being listed here means that a source was consulted; it does not mean Phi adopts the source's full
 architecture or endorses every implementation choice. The current Phi design is defined by
-[`architecture.md`](architecture.md), [`specs/`](specs/), and implemented code and tests. If Phi
+[`architecture.md`](architecture.md), [`design/`](design/), and implemented code and tests. If Phi
 later incorporates source code rather than an idea or interface comparison, that code must retain
 the upstream project's license and file-level attribution as required.
 
@@ -31,7 +31,7 @@ the upstream project's license and file-level attribution as required.
   Sessions; Context compaction; project instructions; Skills; and separate Textual and print Hosts.
 - Phi's direction: use Tau as a close architectural comparison, not an implementation template.
   Phi retains one top-level `phi` namespace, its own Model/Harness/Session vocabulary and dependency
-  graph, explicit approval and confinement boundaries, and its own specifications and tests.
+  graph, explicit approval and confinement boundaries, and its own designs and tests.
 
 ### Pi Agent Harness
 

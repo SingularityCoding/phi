@@ -76,15 +76,17 @@ Never commit, print, log, or place a real virtual key in tests or documentation.
 - `CONTRIBUTING.md` is for contributors and owns current setup, commands, and validation workflow.
 - `CONTEXT.md` is the implementation-free project glossary.
 - `docs/architecture.md` describes system structure and dependency direction.
-- `docs/specs/` contains the current implementation design for each capability.
+- `docs/design/` contains the long-lived system design for each capability.
 - `docs/roadmap.md` records implementation status and sequencing.
 - `docs/deferred.md` records deliberately deferred capabilities and the reasons for deferring them.
 - `docs/course-design.md` is a historical course-first draft, not current engineering design
   authority.
 
-When documents disagree, implemented code and tests win, followed by current specifications and
-architecture documents, then historical material. Record an ADR only for a consequential decision
-that is hard to reverse, surprising without context, and chosen from genuine alternatives.
+When documents disagree, implemented code and tests win, followed by current system design and
+architecture documents, then historical material. A Feature Spec may be created when a concrete
+implementation slice begins; do not use long-lived system-design documents as implementation task
+plans. Record an ADR only for a consequential decision that is hard to reverse, surprising without
+context, and chosen from genuine alternatives.
 
 ## Agent workflow and safety
 

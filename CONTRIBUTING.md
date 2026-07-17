@@ -37,7 +37,7 @@ The bare command currently launches the minimal Textual shell:
 uv run phi
 ```
 
-Commands documented in design specifications are not available until their code and tests land.
+Commands documented in system-design documents are not available until their code and tests land.
 
 ## Required validation
 
