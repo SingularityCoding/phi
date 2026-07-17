@@ -58,6 +58,11 @@ capabilities:
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
   services rather than separate implementations.
 
+The Model gateway is implemented today, including non-streaming and streaming transport,
+normalized Tool Calls and Usage, typed failures, model discovery, response assembly, and a
+deterministic Scripted Model. The CLI and TUI remain a minimal shell while the Environment, tools,
+Harness, Sessions, and later roadmap stages are built.
+
 ## Design principles
 
 - Keep the Model stateless and the Hosts thin.

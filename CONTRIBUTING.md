@@ -94,6 +94,12 @@ that generated directory to GitHub Pages.
 - Behavioral evaluations should inspect the final Environment state rather than trusting the
   model's self-report.
 
+Run the opt-in Model contracts only with configured Proxy credentials:
+
+```bash
+PHI_RUN_MODEL_CONTRACTS=1 uv run pytest -m contract tests/model/test_contract.py
+```
+
 ## Dependencies and generated files
 
 - Use `uv`; do not install project dependencies with `pip` directly.

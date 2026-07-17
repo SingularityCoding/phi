@@ -1,6 +1,6 @@
 # Model Gateway Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Implemented.
 
 ## Boundary
 

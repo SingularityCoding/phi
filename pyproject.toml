@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "textual>=8.2.8",
@@ -44,6 +45,9 @@ select = ["E", "F", "I", "UP", "B"]
 testpaths = ["tests"]
 addopts = "--cov=src --cov-report=term-missing --strict-markers --strict-config"
 asyncio_mode = "auto"
+markers = [
+    "contract: opt-in tests against the real LiteLLM Proxy",
+]
 
 [tool.coverage.run]
 branch = true

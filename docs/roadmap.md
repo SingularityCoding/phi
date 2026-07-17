@@ -16,17 +16,20 @@ Implemented today:
 - environment-backed settings for the LiteLLM Proxy;
 - Typer entry point with bare invocation;
 - minimal Textual application shell;
+- stateless OpenAI-compatible Model gateway with HTTP and SSE normalization;
+- standalone response assembly, typed Model failures, and model discovery;
+- deterministic Scripted Model plus offline protocol tests and opt-in live contracts;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next implementation boundary is `phi.model`.
+The next implementation boundary is the confined Environment and tools.
 
 ## v1 capability scope
 
 | Capability | Design | Implementation |
 | --- | --- | --- |
-| OpenAI-compatible Model, errors, streaming, assembler | Complete | Not started |
-| Scripted Model and offline protocol tests | Complete | Not started |
+| OpenAI-compatible Model, errors, streaming, assembler | Complete | Implemented |
+| Scripted Model and offline protocol tests | Complete | Implemented |
 | Confined Environment and file/process result types | Complete | Not started |
 | Tool registry, dispatcher, approvals, built-in tools | Complete | Not started |
 | Bounded Run, Events, Hooks, cancellation | Complete | Not started |
@@ -36,7 +39,7 @@ The next implementation boundary is `phi.model`.
 | stdio MCP tools, resources, prompts, configuration | Complete | Not started |
 | Delegation-style multi-agent tools | Complete | Not started |
 | Headless CLI and complete Textual TUI | Complete | Minimal shell only |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Foundation only |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Model coverage implemented |
 
 ## Implementation sequence
 
