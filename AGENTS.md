@@ -1,103 +1,229 @@
-# Phi Project Guide
+# Phi Coding Agent Guide
 
-## Project intent
+## Scope and project intent
 
-Phi is a complete, engineering-quality reference implementation of a Python Agent Harness that
-will later be adapted into teaching material. Build the reference implementation first; derive the
-course edition, exercises, and lesson plan from a stable Phi release rather than constraining the
-runtime to a provisional class schedule.
+These instructions apply to the entire `phi` repository. Phi lives inside a multi-repository
+workspace, but it is an independent Git repository with its own dependencies and history. Run all
+commands from this repository root and do not modify or synchronize sibling projects unless the
+user explicitly asks.
 
-“From scratch” means implementing the Harness, not training a language model. Do not replace the
-core learning path with LangChain, Agno, an Agents SDK, or another framework that owns the loop.
+Phi is being developed in two stages. The first stage focuses on building a nearly complete, well-architected, testable, and maintainable Agent reference implementation without prematurely simplifying it for teaching. Once that implementation is stable, the second stage will adapt it into a course by removing selected key components for students to implement, based on factors such as class size, student background, learning objectives, and course duration. The resulting course materials, exercises, and assessment criteria will be published in a separate GitHub repository. Phi is currently in the first stage, where the priority is completing the reference Agent rather than creating the student version.
 
-Phi uses this definition:
+The central definition is:
 
 > **Agent = Model + Harness**
 
-The canonical project vocabulary is defined in [`CONTEXT.md`](CONTEXT.md).
+Use the canonical vocabulary in [`CONTEXT.md`](CONTEXT.md). In particular, do not use Model, Agent,
+Harness, Run, Session, Context, Conversation View, Event, Hook, Trace, Tool Call, or Tool Result as
+interchangeable terms.
+
+## Sources of truth
+
+Use these sources according to their role:
+
+| Source | Authority |
+| --- | --- |
+| Implemented code and tests | Current behavior; highest authority when documents disagree |
+| `CONTRIBUTING.md` | Current setup, commands, validation, and test policy |
+| `CONTEXT.md` | Canonical domain language |
+| `docs/architecture.md` | System layers, ownership, dependency direction, and target layout |
+| `docs/design/*.md` | Long-lived design contracts for each capability |
+| `docs/roadmap.md` | What exists now, what comes next, and v1 completion criteria |
+| `README.md` | User-facing claims about behavior available now |
+| `docs/course/` | Teaching prototype; not engineering-design authority |
+| `docs/course-design.md` | Historical course-first input; not current design authority |
+
+Read the relevant design document before implementing its capability. A design document describes
+the destination, not proof that the code exists. When docs disagree, prefer code and tests, then
+current architecture/design documents, then historical material.
+
+## Running the current application
+
+Launch the current Textual shell with:
+
+```bash
+uv run phi
+```
+
+Press `q` to exit. This is currently an interactive UI shell, not a working model chat and not a
+headless agent command. Commands mentioned only in `docs/design/` are unavailable until their code
+and tests land.
+
+Runtime settings use the `PHI_` prefix and may be placed in `.env`:
+
+| Variable | Purpose |
+| --- | --- |
+| `PHI_BASE_URL` | OpenAI-compatible LiteLLM Proxy base URL |
+| `PHI_API_KEY` | LiteLLM virtual key |
+| `PHI_DEFAULT_MODEL` | Default proxy model name |
+| `PHI_REQUEST_TIMEOUT_SECONDS` | Model request timeout in seconds |
+
+Defaults and parsing behavior live in `src/phi/settings.py`; `.env.example` is the copyable
+template. Do not assume that a design document's future setting is already accepted by the current
+`Settings` model.
+
+## Development commands
+
+`Taskfile.yml` provides these shortcuts:
+
+| Command | Effect |
+| --- | --- |
+| `task --list` | List available tasks |
+| `task setup` | Run locked sync and create `.env` only when missing |
+| `task lint` | Run Ruff lint checks |
+| `task format-check` | Check formatting without changing files |
+| `task typecheck` | Run ty |
+| `task test -- <pytest args>` | Run pytest with optional focused arguments |
+| `task check` | Run all required non-mutating handoff checks |
+| `task fix` | Apply safe Ruff fixes and formatting; this modifies files |
+| `task pre-commit` | Run all prek hooks; some hooks may modify files |
+
+Prefer the non-mutating checks while inspecting or reviewing. Use `task fix` or autofixing hooks
+only when edits are in scope, then review every resulting diff.
+
+## Testing and validation
+
+Run the complete handoff suite for code, configuration, or behavior changes:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run ty check
+uv run pytest
+```
+
+If Task is installed, `task check` runs the same sequence. `pytest` is configured to discover tests
+under `tests/`, enable `pytest-asyncio` auto mode, measure branch coverage across `src`, and show
+missing lines. There is currently no enforced minimum coverage percentage; do not invent one.
+
+Useful focused forms include:
+
+```bash
+uv run pytest tests/test_cli.py
+uv run pytest tests/test_app.py
+uv run pytest tests/test_cli.py -k bare
+```
+
+Name test modules `test_*.py` and test functions `test_*`. Place shared fixtures in `conftest.py`
+only when more than one test genuinely shares them.
+
+Test policy:
+
+- Keep the default suite deterministic, offline, and independent of real credentials.
+- Model and Harness tests should use an injected Scripted Model that records requests and fails
+  when its response script is exhausted.
+- Assert normalized protocol shape, Event order, stopping reasons, authorization decisions, and
+  observable Environment outcomes.
+- Do not assert exact nondeterministic prose from a live model or trust the model's claim that work
+  completed; inspect Environment state instead.
+- Mark real LiteLLM Proxy contract tests separately and require an explicit opt-in. Run them only
+  when the task needs live integration coverage and suitable credentials are available.
+- Add or update tests with behavior changes. A new capability should arrive as a tested vertical
+  slice rather than a collection of unused abstractions.
+
+For a documentation-only change, run at least:
+
+```bash
+git diff --check
+```
+
+Also run the full suite when documentation changes commands, paths, imports, configuration,
+architecture constraints, or claims about implemented behavior. `.pre-commit-config.yaml` runs
+repository hygiene, Ruff, and ty on pre-commit; its pre-push stage runs pytest. The only current
+GitHub Actions workflow validates the course site, so it does not replace local Python checks.
 
 ## Architecture invariants
 
-- Keep one installable distribution and one top-level namespace: `phi`.
-- The Model is a thin, stateless protocol boundary. It must not own conversation history, context
-  assembly, tool execution, sessions, or UI behavior.
+- Keep one installable distribution and one top-level Python namespace: `phi`.
+- The Model is a thin, stateless protocol boundary. It does not own history, Context assembly,
+  tool execution, Sessions, or UI behavior.
 - The Harness owns the bounded control loop, in-run state, tool authorization and execution,
-  failure policy, events, hooks, and stopping decisions.
-- Durable conversation history belongs to Sessions. A finite Context is projected from the current
-  conversation view; a Trace is a persisted observation of Events. Do not conflate them.
+  failure policy, Events, Hooks, cancellation, and stopping decisions.
+- Durable conversation history belongs to Sessions. A finite Context is projected from a
+  Conversation View. A Trace is a persisted observation of Events. Keep these representations
+  distinct.
 - The Environment provides ground truth through files, processes, tests, and external services.
-- Typer CLI and Textual TUI are Hosts. They must stay thin and must not own the canonical loop or
-  durable conversation state.
-- When CLI commands and TUI slash commands expose the same operation, they must call the same
-  underlying service.
-- Tool schemas may be proposed to the Model, but only the Harness may validate, authorize,
-  execute, retry, or reject a tool call.
-- Events are notifications. Hooks may affect behavior. Do not mix interception semantics into the
-  event stream.
-- Model streaming must assemble the same normalized final response as non-streaming requests.
+- Typer CLI and Textual TUI are thin Hosts. Shared operations must call the same underlying service
+  rather than being reimplemented per Host.
+- The Model may propose a Tool Call, but only the Harness may validate, authorize, execute, retry,
+  or reject it.
+- Events are notifications and cannot alter behavior. Hooks are explicit interception points that
+  may alter behavior.
+- Streaming and non-streaming Model paths must assemble the same normalized final response.
 - Multi-agent delegation must compose the existing Session, Run, Tool, Hook, and Event primitives;
   it must not introduce a second hidden agent loop.
-- Create packages and abstractions when their first real capability arrives. The target package map
-  is a dependency guide, not an instruction to create empty modules.
+- Evaluate outcomes against Environment state and fail closed when approval, confinement, or
+  execution state is uncertain.
 
-The complete package map and dependency graph live in
-[`docs/architecture.md`](docs/architecture.md).
+Preserve the negative dependency rules in `docs/architecture.md`: Model must not depend on Harness,
+Sessions, or Hosts; Harness must not depend on Sessions, Hosts, Skills, MCP, or Subagents; Hosts
+must not duplicate application behavior; and Subagents must delegate through existing Session and
+Run services.
 
-## Model gateway boundary
+## Model gateway and trust boundaries
 
-Phi speaks OpenAI-compatible HTTP to the course LiteLLM Proxy. Do not add the LiteLLM Python SDK
-unless a later documented decision introduces a direct-to-provider use case. The adapter owns HTTP
-and SSE transport plus protocol normalization; it does not own Agent behavior.
+Phi communicates with the course LiteLLM Proxy through OpenAI-compatible HTTP and SSE. The adapter
+owns transport and protocol normalization, not Agent behavior. Do not add the LiteLLM Python SDK
+unless a later documented decision introduces a direct-provider use case.
 
-Never commit, print, log, or place a real virtual key in tests or documentation.
+Tool schemas may be sent to the Model, but model output is untrusted input. Validate arguments,
+apply approval policy, enforce timeouts, and return typed Tool Results at the dispatcher boundary.
+File-system confinement is honest only for operations routed through the confined Environment;
+shell, MCP, and Subagent capabilities are not automatically path-confined. Phi does not claim OS
+sandboxing.
 
-## Engineering principles
+Never commit, print, log, trace, fixture, screenshot, or document a real API key or virtual key.
+Keep secrets in the ignored `.env` file or the external execution environment. Do not silently
+replace a missing credential with another identity or endpoint.
+
+## Python and code conventions
 
 - Use Python 3.12 features and complete type annotations at public boundaries.
-- Prefer explicit internal types for model responses, tool calls, usage, run results, entries, and
-  events. Keep OpenAI-compatible wire dictionaries at the adapter boundary.
-- Use standard-library dataclasses for trusted in-memory values. Use Pydantic at untrusted parsing
-  boundaries such as environment configuration and persisted session data.
-- Prefer async boundaries for network I/O, streaming, cancellation, tools, MCP, and multi-agent
-  work. Sync tool handlers may be adapted behind the async dispatcher boundary.
-- Treat expected failures as typed data where the design calls for recovery; reserve failed Runs
-  for failures the loop cannot safely handle.
-- Default to deterministic, offline tests. Use a Scripted Model that records requests and fails when
-  its response script is exhausted.
-- Evaluate Agent outcomes against Environment state, not against the model's claim that work is
-  complete.
-- Default to fail closed whenever approval, confinement, or execution state is uncertain.
-- Keep `__init__.py` files small and expose only deliberate public APIs.
-- Use absolute imports from `phi`.
+- Use absolute imports from `phi`; avoid relative imports between project packages.
+- Ruff targets Python 3.12, enforces a 100-character line length, and enables `E`, `F`, `I`, `UP`,
+  and `B` rules. Formatting is owned by Ruff.
+- Prefer standard-library dataclasses for trusted in-memory values and Pydantic for untrusted
+  parsing boundaries such as environment configuration and persisted Session data.
+- Keep OpenAI-compatible wire dictionaries at the adapter boundary. Use explicit internal types
+  for Model responses, Tool Calls, Usage, Run results, Entries, and Events.
+- Prefer async boundaries for network I/O, streaming, cancellation, tools, MCP, and Subagents.
+  Adapt synchronous tool handlers behind the async dispatcher instead of blocking the loop.
+- Treat recoverable failures as typed data where the design requires recovery. Reserve a failed
+  Run for a failure the loop cannot safely handle.
+- Keep `__init__.py` small and export only deliberate public APIs.
+- Keep CLI callbacks thin and Textual widgets focused on presentation and interaction. Business
+  behavior belongs in shared services.
+- Avoid speculative abstractions. Follow the target dependency direction when the first real
+  consumer justifies a new module.
 
-## Documentation authority
+For substantial Textual work, repository-specific architecture and the installed project versions
+take precedence over generic examples. Test UI behavior with Textual's headless `run_test()`
+support rather than relying only on manual terminal interaction.
 
-- `README.md` is for users and describes only behavior that exists now.
-- `CONTRIBUTING.md` is for contributors and owns current setup, commands, and validation workflow.
-- `CONTEXT.md` is the implementation-free project glossary.
-- `docs/architecture.md` describes system structure and dependency direction.
-- `docs/design/` contains the long-lived system design for each capability.
-- `docs/roadmap.md` records implementation status and sequencing.
-- `docs/deferred.md` records deliberately deferred capabilities and the reasons for deferring them.
-- `docs/course-design.md` is a historical course-first draft, not current engineering design
-  authority.
+## Change workflow
 
-When documents disagree, implemented code and tests win, followed by current system design and
-architecture documents, then historical material. A Feature Spec may be created when a concrete
-implementation slice begins; do not use long-lived system-design documents as implementation task
-plans. Record an ADR only for a consequential decision that is hard to reverse, surprising without
-context, and chosen from genuine alternatives.
+1. Run `git status --short --branch` and preserve all pre-existing user changes.
+2. Identify the requested capability and inspect its current code, tests, roadmap status, and
+   relevant design document before editing.
+3. Keep the change inside this repository and implement the smallest complete vertical slice that
+   respects the architecture boundaries.
+4. Add or update deterministic tests alongside behavior. Do not create later-stage packages merely
+   to match the target tree.
+5. Update documentation according to its authority: `README.md` for available user behavior,
+   `docs/roadmap.md` for implementation status, and design docs only when the durable contract
+   changes.
+6. Run focused checks during development, then the required handoff suite. Finish with
+   `git diff --check` and review `git diff` for accidental or generated changes.
 
-## Agent workflow and safety
+Use a short-lived feature spec when a concrete implementation slice needs acceptance criteria; do
+not turn the long-lived system design into an implementation checklist. Record an ADR only for a
+consequential, hard-to-reverse decision chosen from genuine alternatives.
 
-- Follow [`CONTRIBUTING.md`](CONTRIBUTING.md) for current setup and validation commands.
-- Inspect `git status --short --branch` before editing and preserve user changes.
-- Keep changes scoped to this repository and the requested capability.
-- Do not hand-edit generated files or caches.
-- Do not copy a reference implementation wholesale. Borrow ideas intentionally, retain required
-  attribution, and keep Phi's own boundaries explicit.
-- Do not run live model acceptance checks without an explicit need; they consume shared external
-  resources and require credentials.
-- Treat file, shell, MCP, and subagent execution as capability boundaries. File-system confinement
-  applies only where the implementation actually routes access through the confined Environment;
-  do not claim it protects unconfined tools.
+Do not hand-edit or commit `.venv/`, `site/`, `dist/`, `__pycache__/`, `.coverage`,
+`.pytest_cache/`, `.ruff_cache/`, or other generated artifacts. Do not copy a reference
+implementation wholesale; borrow ideas intentionally, preserve required attribution, and keep
+Phi's boundaries explicit.
+
+There is currently no enforced repository-specific PR title or commit-message format. Do not
+commit, push, publish, or deploy unless the user asks. At handoff, report the files changed, checks
+run, and any checks or live integrations not run.

@@ -28,6 +28,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.15.21",
+    "textual-dev>=1.8.0",
     "ty>=0.0.59",
 ]
 
