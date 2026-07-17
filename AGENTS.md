@@ -37,17 +37,11 @@ Read the relevant design document before implementing its capability. A design d
 the destination, not proof that the code exists. When docs disagree, prefer code and tests, then
 current architecture/design documents, then historical material.
 
-## Running the current application
+## Runtime settings
 
-Launch the current Textual shell with:
-
-```bash
-uv run phi
-```
-
-Press `q` to exit. This is currently an interactive UI shell, not a working model chat and not a
-headless agent command. Commands mentioned only in `docs/design/` are unavailable until their code
-and tests land.
+See `CONTRIBUTING.md` for repository setup and how to launch Phi (`uv run phi`, currently a minimal
+Textual shell — press `q` to exit). Commands mentioned only in `docs/design/` are unavailable until
+their code and tests land.
 
 Runtime settings use the `PHI_` prefix and may be placed in `.env`:
 
@@ -83,18 +77,13 @@ only when edits are in scope, then review every resulting diff.
 
 ## Testing and validation
 
-Run the complete handoff suite for code, configuration, or behavior changes:
+`CONTRIBUTING.md` is authoritative for the required validation suite, test policy, and when a
+documentation-only change can skip it — run `task check` (or the equivalent `uv run` commands listed
+there) before handoff.
 
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
-uv run pytest
-```
-
-If Task is installed, `task check` runs the same sequence. `pytest` is configured to discover tests
-under `tests/`, enable `pytest-asyncio` auto mode, measure branch coverage across `src`, and show
-missing lines. There is currently no enforced minimum coverage percentage; do not invent one.
+`pytest` is configured to discover tests under `tests/`, enable `pytest-asyncio` auto mode, measure
+branch coverage across `src`, and show missing lines. There is currently no enforced minimum
+coverage percentage; do not invent one.
 
 Useful focused forms include:
 
@@ -107,30 +96,8 @@ uv run pytest tests/test_cli.py -k bare
 Name test modules `test_*.py` and test functions `test_*`. Place shared fixtures in `conftest.py`
 only when more than one test genuinely shares them.
 
-Test policy:
-
-- Keep the default suite deterministic, offline, and independent of real credentials.
-- Model and Harness tests should use an injected Scripted Model that records requests and fails
-  when its response script is exhausted.
-- Assert normalized protocol shape, Event order, stopping reasons, authorization decisions, and
-  observable Environment outcomes.
-- Do not assert exact nondeterministic prose from a live model or trust the model's claim that work
-  completed; inspect Environment state instead.
-- Mark real LiteLLM Proxy contract tests separately and require an explicit opt-in. Run them only
-  when the task needs live integration coverage and suitable credentials are available.
-- Add or update tests with behavior changes. A new capability should arrive as a tested vertical
-  slice rather than a collection of unused abstractions.
-
-For a documentation-only change, run at least:
-
-```bash
-git diff --check
-```
-
-Also run the full suite when documentation changes commands, paths, imports, configuration,
-architecture constraints, or claims about implemented behavior. `.pre-commit-config.yaml` runs
-repository hygiene, Ruff, and ty on pre-commit; its pre-push stage runs pytest. The only current
-GitHub Actions workflow validates the course site, so it does not replace local Python checks.
+The only current GitHub Actions workflow validates the course site, so it does not replace local
+Python checks.
 
 ## Architecture invariants
 
@@ -227,3 +194,20 @@ Phi's boundaries explicit.
 There is currently no enforced repository-specific PR title or commit-message format. Do not
 commit, push, publish, or deploy unless the user asks. At handoff, report the files changed, checks
 run, and any checks or live integrations not run.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as GitHub issues in `SingularityCoding/phi`, managed via the `gh` CLI. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles map 1:1 to label strings of the same name (`needs-triage`,
+`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: `CONTEXT.md` at the repo root, ADRs under `docs/adr/`. See
+`docs/agents/domain.md`.
