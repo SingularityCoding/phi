@@ -1,6 +1,6 @@
 # Tools, Environment, and Safety Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Implemented.
 
 ## Authority boundary
 
@@ -18,21 +18,28 @@ class Tool:
     name: str
     description: str
     handler: Callable[..., Any]
-    args_schema: dict[str, Any]
+    args_schema: Mapping[str, Any]
     args_model: type[BaseModel] | None = None
     approval_class: Literal["read_only", "mutates_workspace", "unconfined"] = "read_only"
     timeout_seconds: float | None = None
+    timeout_parameter: str | None = None
 ```
 
 - `args_schema` always exists and is the sole source for Model-visible tool specifications.
+  It is recursively immutable after Tool construction so it cannot drift from local validation.
 - Local Python tools derive a Pydantic model from the annotated handler signature and cache its
   JSON Schema.
 - MCP tools have a remote JSON Schema but no local Pydantic model; validation remains with the MCP
   server.
 - `approval_class` is an approval bucket, not a complete capability inventory and not a confinement
   guarantee.
+- `timeout_parameter` optionally identifies a validated, finite positive Model argument that
+  supplies a handler-level operation timeout; the dispatcher retains an outer bound with cleanup
+  grace.
 - Tool handlers may be sync or async. The dispatcher awaits async handlers and adapts sync handlers
-  through a worker thread.
+  through a worker thread. A timeout bounds the dispatcher's wait, but Python cannot forcibly stop
+  an already-running worker thread; side-effectful handlers should therefore be async and preserve
+  cancellation semantics.
 
 A `@tool(...)` decorator may construct this definition from a typed Python function. Trusted
 injected values such as Environment and Tool Context are not exposed as Model arguments.
@@ -122,7 +129,8 @@ For every `FileSystem` operation it:
 4. denies access when any check fails.
 
 This is a structural guarantee only for tools whose handlers use the injected `FileSystem`. It is
-not an operating-system sandbox.
+not an operating-system sandbox and does not eliminate every concurrent filesystem
+time-of-check/time-of-use race.
 
 `bash`, MCP tools, and `spawn_agent` are `unconfined`: their internal effects cannot be enumerated or
 path-checked by `ConfinedEnvironment`. They are limited only by cwd, timeout, and approval in v1.

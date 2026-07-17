@@ -58,10 +58,19 @@ capabilities:
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
   services rather than separate implementations.
 
-The Model gateway is implemented today, including non-streaming and streaming transport,
-normalized Tool Calls and Usage, typed failures, model discovery, response assembly, and a
-deterministic Scripted Model. The CLI and TUI remain a minimal shell while the Environment, tools,
-Harness, Sessions, and later roadmap stages are built.
+The Model gateway and Tool processing boundary are implemented today. In addition to streaming and
+non-streaming Model transport, Phi now has a schema-derived Tool registry, strict local argument
+validation, Approval Policy presets, asynchronous dispatch with timeout and cancellation semantics,
+and seven built-in Tools.
+
+`read`, `write`, `edit`, `grep`, `find`, and `ls` route file access through a FileSystem that
+canonically resolves paths, confines them to an explicit workspace root, and denies protected Git
+metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
+and is governed by approval and timeout, but it is unconfined and is not an operating-system
+sandbox. File Confinement is an in-process structural check, not protection against every
+filesystem race. The CLI and TUI remain a minimal shell while the Harness, Sessions, and later
+roadmap stages are built; this Tool boundary is currently available to those later runtime layers
+rather than wired into an interactive Run.
 
 ## Design principles
 

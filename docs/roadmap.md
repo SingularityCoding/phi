@@ -19,10 +19,14 @@ Implemented today:
 - stateless OpenAI-compatible Model gateway with HTTP and SSE normalization;
 - standalone response assembly, typed Model failures, and model discovery;
 - deterministic Scripted Model plus offline protocol tests and opt-in live contracts;
+- asynchronous FileSystem and Shell protocols with typed file and process failures;
+- canonical workspace Confinement with protected repository and dotenv paths;
+- schema-derived Tool registration, strict argument validation, Approval Policy, and async dispatch;
+- confined `read`, `write`, `edit`, `grep`, `find`, and `ls` Tools plus explicitly unconfined `bash`;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next implementation boundary is the confined Environment and tools.
+The next implementation boundary is the Harness core.
 
 ## v1 capability scope
 
@@ -30,8 +34,8 @@ The next implementation boundary is the confined Environment and tools.
 | --- | --- | --- |
 | OpenAI-compatible Model, errors, streaming, assembler | Complete | Implemented |
 | Scripted Model and offline protocol tests | Complete | Implemented |
-| Confined Environment and file/process result types | Complete | Not started |
-| Tool registry, dispatcher, approvals, built-in tools | Complete | Not started |
+| Confined Environment and file/process result types | Complete | Implemented |
+| Tool registry, dispatcher, approvals, built-in tools | Complete | Implemented |
 | Bounded Run, Events, Hooks, cancellation | Complete | Not started |
 | Session entries, JSONL storage, resume, fork | Complete | Not started |
 | Context construction and compaction | Complete | Not started |
@@ -39,7 +43,7 @@ The next implementation boundary is the confined Environment and tools.
 | stdio MCP tools, resources, prompts, configuration | Complete | Not started |
 | Delegation-style multi-agent tools | Complete | Not started |
 | Headless CLI and complete Textual TUI | Complete | Minimal shell only |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Model coverage implemented |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, and Tool coverage implemented |
 
 ## Implementation sequence
 
