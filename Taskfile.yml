@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  default:
+    desc: List available development tasks
+    cmds:
+      - task --list
+    silent: true
+
+  init-env:
+    desc: Create .env from .env.example if it does not exist
+    status:
+      - test -f .env
+    cmds:
+      - cp .env.example .env
+
+  setup:
+    desc: Set up the local development environment
+    preconditions:
+      - sh: command -v uv
+        msg: uv is required; install it from https://docs.astral.sh/uv/
+    cmds:
+      - uv sync --locked
+      - task: init-env
+
+  pre-commit:
+    desc: Run pre-commit hooks against all files (may modify files)
+    cmds:
+      - uv run prek run --all-files
+
+  fix:
+    desc: Apply safe Ruff fixes and format Python code
+    cmds:
+      - uv run ruff check --fix .
+      - uv run ruff format .
+
+  lint:
+    desc: Check Python code with Ruff
+    cmds:
+      - uv run ruff check .
+
+  format-check:
+    desc: Check Python formatting with Ruff without modifying files
+    cmds:
+      - uv run ruff format --check .
+
+  typecheck:
+    desc: Type-check the project with ty
+    cmds:
+      - uv run ty check
+
+  test:
+    desc: Run the offline test suite with coverage
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  check:
+    desc: Run all required handoff checks without modifying files
+    cmds:
+      - task: lint
+      - task: format-check
+      - task: typecheck
+      - task: test
+
+  course-serve:
+    desc: Preview the course site with live reload
+    cmds:
+      - uv run --group docs mkdocs serve
+
+  course-build:
+    desc: Build and strictly validate the course site
+    cmds:
+      - uv run --group docs mkdocs build --strict
