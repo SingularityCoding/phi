@@ -1,0 +1,83 @@
+site_name: Phi
+site_description: Build an Agent Harness from scratch in Python.
+docs_dir: docs/course
+site_dir: site
+use_directory_urls: true
+
+theme:
+  name: material
+  language: zh
+  font: false
+  icon:
+    logo: material/code-braces
+  palette:
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色模式
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色模式
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.footer
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - 课程首页: index.md
+  - 课程信息:
+      - 课程说明: syllabus.md
+      - 课程安排: schedule.md
+  - Chapters:
+      - 章节总览: chapters/index.md
+      - "01 · Model Boundary": chapters/01-model-boundary.md
+      - "02 · Tool Round Trip": chapters/02-tool-round-trip.md
+      - "03 · Agent Loop": chapters/03-agent-loop.md
+  - Appendix:
+      - 环境准备: appendix/setup.md
+
+extra_css:
+  - stylesheets/extra.css
+
+copyright: Phi · Agent = Model + Harness
