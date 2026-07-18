@@ -16,6 +16,16 @@ _Avoid_: course sample, teaching toy
 A deliberately reduced teaching version derived from a stable Phi Reference release.
 _Avoid_: Phi Reference
 
+**Async Lab**:
+A deterministic, guided pre-course lab that establishes the Python asynchronous-programming
+knowledge required by the Course Edition.
+_Avoid_: graded assignment, course Chapter
+
+**Async Readiness Check**:
+A scenario-based self-check used either to test out of the Async Lab or to verify readiness after
+completing it.
+_Avoid_: exam, percentage score
+
 ### Agent, Model, and Harness
 
 **Agent**:

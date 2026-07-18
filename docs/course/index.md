@@ -13,7 +13,8 @@ hide:
     <p>从一次模型请求开始，逐步构建工具协议、控制循环、上下文、会话与可观测性。
     最终得到一个由自己理解、实现并能够解释的 Agent Harness。</p>
     <p class="phi-hero__actions">
-      <a class="md-button md-button--primary" href="chapters/01-model-boundary/">开始 Chapter 01</a>
+      <a class="md-button md-button--primary" href="prework/async-lab/">完成课前 Async Lab</a>
+      <a class="md-button" href="chapters/01-model-boundary/">开始 Chapter 01</a>
       <a class="md-button" href="schedule/">查看课程安排</a>
     </p>
   </div>
@@ -52,6 +53,13 @@ hide:
 </div>
 
 ## 学习方式
+
+!!! tip "第一次使用 async / await？"
+
+    正课默认学生已经通过 [Async Readiness Check](prework/async-lab/readiness-check.md)。
+    如果你有 Python 开发经验但不熟悉异步编程，请先完成约 2–3 小时的
+    [课前 Async Lab](prework/async-lab/index.md)。已经熟悉异步编程的学生可以直接挑战
+    Readiness Check。
 
 <div class="phi-path" markdown>
   <div class="phi-path__step" markdown><strong>01 · Observe</strong><span>先观察一次完整行为和 Trace。</span></div>

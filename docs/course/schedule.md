@@ -1,9 +1,13 @@
 # 课程安排
 
-下面是课程站原型使用的章节节奏。最终授课时长和课堂切口会在 Phi Reference 稳定后确定。
+正课前，所有学生都需要通过 [Async Readiness Check](prework/async-lab/readiness-check.md)。
+已有异步编程经验的学生可以直接参加检查；其他学生先完成
+[课前 Async Lab](prework/async-lab/index.md)。下面是课程站原型使用的章节节奏，最终授课
+时长和课堂切口会在 Phi Reference 稳定后确定。
 
 | 阶段 | Chapter | 主题 | 主要产出 |
 | --- | --- | --- | --- |
+| Pre-course | — | Python Async Lab | coroutine、Tasks、streaming、cancellation readiness |
 | Foundations | [01](chapters/01-model-boundary.md) | Model Boundary | 归一化类型、Model Protocol、Scripted Model |
 | Tools | [02](chapters/02-tool-round-trip.md) | Tool Round Trip | Registry、参数校验、Dispatcher、Tool Result |
 | Harness | [03](chapters/03-agent-loop.md) | Agent Loop | Run、Step、Events、停止原因 |
