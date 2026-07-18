@@ -1,7 +1,8 @@
 # 环境准备
 
-正式课程开始前，请在 `phi-starter` 仓库中完成一次本地预检。下面的命令展示预期流程；
-Starter Repository 发布时会提供与课程 release 对应的最终版本。
+正式课程开始前，请先通过 Async Readiness Check，再在 `phi-starter` 仓库中完成一次本地
+预检。下面的命令展示预期流程；Starter Repository 发布时会提供与课程 release 对应的
+最终版本。
 
 ## 需要安装
 
@@ -17,6 +18,21 @@ python3 --version
 uv --version
 git --version
 ```
+
+## 完成课前 Async Lab
+
+不熟悉 Python 异步编程的学生先克隆公开 Lab：
+
+```bash
+git clone https://github.com/SingularityCoding/phi-async-lab.git
+cd phi-async-lab
+uv sync --locked
+uv run pytest
+```
+
+按照 [Async Lab 教程](../prework/async-lab/index.md)完成各 checkpoint，最后通过
+[Async Readiness Check](../prework/async-lab/readiness-check.md)。已有异步编程经验的学生
+可以直接参加检查；如果有任何核心题无法完整解释，再回到对应 checkpoint。
 
 ## 初始化 Starter Repository
 

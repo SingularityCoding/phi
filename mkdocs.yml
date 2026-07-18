@@ -69,6 +69,18 @@ nav:
   - 课程信息:
       - 课程说明: syllabus.md
       - 课程安排: schedule.md
+  - 课前准备:
+      - 准备说明: prework/index.md
+      - Async Lab:
+          - 实验说明: prework/async-lab/index.md
+          - "01 · 同步基线": prework/async-lab/01-sync-baseline.md
+          - "02 · Coroutine": prework/async-lab/02-coroutines.md
+          - "03 · Tasks": prework/async-lab/03-tasks.md
+          - "04 · 结构化并发": prework/async-lab/04-structured-concurrency.md
+          - "05 · 阻塞 Event Loop": prework/async-lab/05-blocking.md
+          - "06 · Async Iterator": prework/async-lab/06-async-iteration.md
+          - "07 · Timeout 与取消": prework/async-lab/07-cancellation.md
+          - 准备度检查: prework/async-lab/readiness-check.md
   - Chapters:
       - 章节总览: chapters/index.md
       - "01 · Model Boundary": chapters/01-model-boundary.md
