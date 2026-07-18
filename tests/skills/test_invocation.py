@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from phi.bootstrap import build_runtime_resources
 from phi.harness import EventBus, RunEvent, RunStatus, ToolCallCompleted, ToolCallStarted
 from phi.model import ModelResponse, ScriptedModel, ToolCall
@@ -28,12 +30,13 @@ async def test_preloaded_skill_activation_uses_the_existing_run_events_and_trace
 ) -> None:
     cwd = tmp_path / "workspace"
     cwd.mkdir()
-    source = cwd / ".phi" / "skills" / "explain.md"
+    global_root = tmp_path / "global"
+    source = global_root / "explain.md"
     _write_skill(source)
     resources = build_runtime_resources(
         cwd,
         base_instructions="Phi base.",
-        global_skill_root=tmp_path / "global",
+        global_skill_root=global_root,
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
     source.unlink()
@@ -89,8 +92,10 @@ async def test_preloaded_skill_activation_uses_the_existing_run_events_and_trace
     }
 
 
-async def test_skill_tool_returns_nondisclosing_errors_for_unknown_and_disabled_names(
+@pytest.mark.parametrize("requested_name", ["missing", "disabled"])
+async def test_skill_tool_errors_are_nondisclosing_and_recoverable_inside_a_run(
     tmp_path: Path,
+    requested_name: str,
 ) -> None:
     cwd = tmp_path / "workspace"
     cwd.mkdir()
@@ -104,19 +109,45 @@ async def test_skill_tool_returns_nondisclosing_errors_for_unknown_and_disabled_
         global_skill_root=tmp_path / "global",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
-
-    unknown = await resources.dispatcher.dispatch(
-        ToolCall("unknown", "skill_tool", {"name": "missing"})
+    model = ScriptedModel(
+        [
+            ModelResponse(
+                tool_calls=[
+                    ToolCall(f"{requested_name}-call", "skill_tool", {"name": requested_name})
+                ]
+            ),
+            ModelResponse(content="Recovered from the Tool error."),
+        ]
     )
-    rejected = await resources.dispatcher.dispatch(
-        ToolCall("disabled", "skill_tool", {"name": "disabled"})
+    storage = SessionStorage(tmp_path / f"{requested_name}-sessions")
+    handle = await create_session(storage, model="model-a")
+
+    _, result = await send_message(
+        handle,
+        "Use the requested Skill.",
+        storage=storage,
+        settings=Settings(),
+        model=model,
+        model_info=None,
+        tools=resources.tools,
+        dispatcher=resources.dispatcher,
+        stable_instructions=resources.stable_instructions,
+        max_steps=2,
     )
 
     expected_error = "skill_unavailable: no Model-invocable Skill has that exact name"
-    assert unknown.output == "" and unknown.error == expected_error
-    assert rejected.output == "" and rejected.error == expected_error
-    assert "Instructions for disabled" not in rejected.error
-    assert str(disabled) not in rejected.error
+    tool_result = result.steps[0].tool_results[0]
+    assert result.status is RunStatus.COMPLETED
+    assert result.output == "Recovered from the Tool error."
+    assert tool_result.output == "" and tool_result.error == expected_error
+    assert model.requests[1].messages[-1] == {
+        "role": "tool",
+        "tool_call_id": f"{requested_name}-call",
+        "content": expected_error,
+    }
+    assert "Instructions for disabled" not in tool_result.error
+    assert str(disabled) not in tool_result.error
+    assert resources.invoke_skill("disabled") == "Instructions for disabled.\n"
     skill_tool = resources.tools.get("skill_tool")
     assert skill_tool is not None
     assert skill_tool.approval_class is ApprovalClass.READ_ONLY

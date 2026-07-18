@@ -228,6 +228,96 @@ def test_discovery_honors_ignore_rules_package_boundaries_and_symlink_bounds(
     assert discovery.diagnostics == ()
 
 
+def test_project_discovery_honors_gitignore_files_between_cwd_and_skill_root(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    project_root = cwd / ".phi" / "skills"
+    project_root.mkdir(parents=True)
+    (cwd / ".phi" / ".gitignore").write_text("skills/ignored.md\n", encoding="utf-8")
+    ignored = project_root / "ignored.md"
+    ignored.write_text(
+        "---\nname: ignored\ndescription: Ignored by an ancestor rule.\n---\nHidden.\n",
+        encoding="utf-8",
+    )
+    visible = project_root / "visible.md"
+    visible.write_text(
+        "---\nname: visible\ndescription: Remains visible.\n---\nVisible.\n",
+        encoding="utf-8",
+    )
+
+    discovery = discover_skills(
+        global_root=tmp_path / "global",
+        project_root=project_root,
+        project_ignore_root=cwd,
+    )
+
+    assert tuple(discovery.skills) == ("visible",)
+
+
+def test_project_discovery_cannot_reinclude_a_skill_below_an_ignored_parent(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    project_root = cwd / ".phi" / "skills"
+    project_root.mkdir(parents=True)
+    (cwd / ".gitignore").write_text(".phi/\n", encoding="utf-8")
+    (cwd / ".phi" / ".gitignore").write_text("!skills/reincluded.md\n", encoding="utf-8")
+    source = project_root / "reincluded.md"
+    source.write_text(
+        "---\nname: reincluded\ndescription: Must remain ignored.\n---\nHidden.\n",
+        encoding="utf-8",
+    )
+
+    discovery = discover_skills(
+        global_root=tmp_path / "global",
+        project_root=project_root,
+        project_ignore_root=cwd,
+    )
+
+    assert discovery.skills == {}
+
+
+def test_discovery_does_not_follow_a_symlinked_skill_root(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    source = outside / "escaped.md"
+    source.write_text(
+        "---\nname: escaped\ndescription: Outside the configured tree.\n---\nOutside.\n",
+        encoding="utf-8",
+    )
+    linked_root = tmp_path / "linked-root"
+    linked_root.symlink_to(outside, target_is_directory=True)
+
+    discovery = discover_skills(
+        global_root=linked_root,
+        project_root=tmp_path / "project",
+    )
+
+    assert discovery.skills == {}
+
+
+def test_project_ignore_loading_does_not_follow_a_symlinked_root_ancestor(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    outside_phi = tmp_path / "outside-phi"
+    outside_skills = outside_phi / "skills"
+    outside_skills.mkdir(parents=True)
+    (outside_phi / ".gitignore").write_bytes(b"\xff")
+    (cwd / ".phi").symlink_to(outside_phi, target_is_directory=True)
+
+    discovery = discover_skills(
+        global_root=tmp_path / "global",
+        project_root=cwd / ".phi" / "skills",
+        project_ignore_root=cwd,
+    )
+
+    assert discovery.skills == {}
+    assert discovery.diagnostics == ()
+
+
 def test_same_scope_collision_keeps_the_first_valid_lexical_candidate(
     tmp_path: Path,
 ) -> None:

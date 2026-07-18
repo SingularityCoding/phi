@@ -38,7 +38,7 @@ def discover_skills(
     """Discover effective global and project Skills from configured roots."""
 
     global_skills, global_diagnostics = _discover_root(global_root)
-    project_rules, ignore_diagnostics = _initial_ignore_rules(project_ignore_root)
+    project_rules, ignore_diagnostics = _initial_ignore_rules(project_ignore_root, project_root)
     project_skills, project_diagnostics = _discover_root(
         project_root,
         initial_rules=project_rules,
@@ -54,7 +54,11 @@ def _discover_root(
     *,
     initial_rules: tuple[_IgnoreRule, ...] = (),
 ) -> tuple[dict[str, Skill], tuple[SkillDiagnostic, ...]]:
-    if not root.is_dir():
+    if (
+        _has_symlink_component(root)
+        or not root.is_dir()
+        or _is_ignored(root, is_directory=True, rules=initial_rules)
+    ):
         return {}, ()
     discovered: dict[str, Skill] = {}
     source_paths, candidate_diagnostics = _candidate_paths(root, initial_rules=initial_rules)
@@ -80,17 +84,42 @@ def _discover_root(
 
 def _initial_ignore_rules(
     ignore_root: Path | None,
+    discovery_root: Path,
 ) -> tuple[tuple[_IgnoreRule, ...], tuple[SkillDiagnostic, ...]]:
     if ignore_root is None:
         return (), ()
-    ignore_path = ignore_root / ".gitignore"
-    if ignore_path.is_symlink() or not ignore_path.is_file():
-        return (), ()
     try:
-        spec = GitIgnoreSpec.from_lines(ignore_path.read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeError, ValueError) as error:
-        return (), (SkillDiagnostic(ignore_path, f"invalid ignore rules: {error}"),)
-    return ((ignore_root, spec),), ()
+        relative_root = discovery_root.relative_to(ignore_root)
+    except ValueError:
+        return (), ()
+
+    rules: list[_IgnoreRule] = []
+    diagnostics: list[SkillDiagnostic] = []
+    directory = ignore_root
+    for component in relative_root.parts:
+        if _has_symlink_component(directory):
+            break
+        ignore_path = directory / ".gitignore"
+        if not ignore_path.is_symlink() and ignore_path.is_file():
+            try:
+                spec = GitIgnoreSpec.from_lines(
+                    ignore_path.read_text(encoding="utf-8").splitlines()
+                )
+            except (OSError, UnicodeError, ValueError) as error:
+                diagnostics.append(SkillDiagnostic(ignore_path, f"invalid ignore rules: {error}"))
+            else:
+                rules.append((directory, spec))
+
+        next_directory = directory / component
+        if _is_ignored(next_directory, is_directory=True, rules=tuple(rules)):
+            break
+        directory = next_directory
+    return tuple(rules), tuple(diagnostics)
+
+
+def _has_symlink_component(path: Path) -> bool:
+    absolute_path = path.absolute()
+    return any(component.is_symlink() for component in (absolute_path, *absolute_path.parents))
 
 
 def _candidate_paths(
