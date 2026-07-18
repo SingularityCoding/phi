@@ -12,6 +12,7 @@ from phi.model import (
     ModelHTTPError,
     ModelProtocolError,
     ModelRequest,
+    ModelResponse,
     ModelTimeoutError,
     OpenAICompatibleModel,
     ReasoningDelta,
@@ -21,6 +22,7 @@ from phi.model import (
     ToolResult,
     Usage,
     UsageEvent,
+    serialize_assistant_response,
     serialize_tool_result,
 )
 
@@ -501,4 +503,34 @@ def test_tool_result_serializes_as_an_openai_tool_message(result: ToolResult, co
         "role": "tool",
         "tool_call_id": "call_one",
         "content": content,
+    }
+
+
+def test_assistant_response_serializes_with_stable_tool_call_arguments():
+    response = ModelResponse(
+        content="Working",
+        reasoning="Need two values",
+        tool_calls=[
+            ToolCall(
+                id="call_one",
+                name="combine",
+                arguments={"z": "最后", "a": 1},
+            )
+        ],
+    )
+
+    assert serialize_assistant_response(response) == {
+        "role": "assistant",
+        "content": "Working",
+        "reasoning_content": "Need two values",
+        "tool_calls": [
+            {
+                "id": "call_one",
+                "type": "function",
+                "function": {
+                    "name": "combine",
+                    "arguments": '{"a":1,"z":"最后"}',
+                },
+            }
+        ],
     }

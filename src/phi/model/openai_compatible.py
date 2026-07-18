@@ -183,6 +183,35 @@ def serialize_tool_result(result: ToolResult) -> dict[str, str]:
     }
 
 
+def serialize_assistant_response(response: ModelResponse) -> dict[str, Any]:
+    """Serialize one normalized Assistant response for a later Model request."""
+
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": response.content,
+    }
+    if response.reasoning is not None:
+        message["reasoning_content"] = response.reasoning
+    if response.tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(
+                        call.arguments,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                },
+            }
+            for call in response.tool_calls
+        ]
+    return message
+
+
 def _events_from_non_streaming_response(raw_value: object) -> list[ModelEvent]:
     raw = _object(raw_value, "Model response")
     choices = raw.get("choices")

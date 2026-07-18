@@ -10,7 +10,11 @@ from phi.model.events import (
     ToolCallDelta,
     UsageEvent,
 )
-from phi.model.openai_compatible import OpenAICompatibleModel, serialize_tool_result
+from phi.model.openai_compatible import (
+    OpenAICompatibleModel,
+    serialize_assistant_response,
+    serialize_tool_result,
+)
 from phi.model.protocol import Model
 from phi.model.registry import list_available_models
 from phi.model.scripted import ScriptedModel
@@ -47,5 +51,6 @@ __all__ = [
     "Usage",
     "UsageEvent",
     "list_available_models",
+    "serialize_assistant_response",
     "serialize_tool_result",
 ]

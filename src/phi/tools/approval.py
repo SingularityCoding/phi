@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from fnmatch import fnmatchcase
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from phi.model import ToolCall
 from phi.tools.types import ApprovalClass, Tool
@@ -30,6 +30,12 @@ class AskResolution(StrEnum):
 
 class ApprovalPolicy(Protocol):
     async def decide(self, call: ToolCall, tool: Tool) -> ApprovalDecision: ...
+
+
+@runtime_checkable
+class ApprovalModeProvider(Protocol):
+    @property
+    def approval_mode_name(self) -> str: ...
 
 
 ApprovalResolver = Callable[[ToolCall, Tool], Awaitable[AskResolution]]
@@ -90,6 +96,10 @@ class RuleBasedApprovalPolicy:
         self.mode = mode
         self._resolver = resolver
         self._session_allowances: set[str] = set()
+
+    @property
+    def approval_mode_name(self) -> str:
+        return self.mode.name
 
     async def decide(self, call: ToolCall, tool: Tool) -> ApprovalDecision:
         matching = tuple(

@@ -4,14 +4,14 @@ import asyncio
 import inspect
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 from phi.model import ToolCall, ToolResult
-from phi.tools.approval import ApprovalDecision, ApprovalPolicy
+from phi.tools.approval import ApprovalDecision, ApprovalModeProvider, ApprovalPolicy
 from phi.tools.registry import ToolRegistry
 from phi.tools.types import Tool
 
@@ -21,6 +21,12 @@ class ToolFailure:
     """Expected handler failure that should remain inside the Tool round trip."""
 
     error: str
+
+
+type ApprovalObserver = Callable[
+    [ToolCall, ApprovalDecision, str | None],
+    Awaitable[None] | None,
+]
 
 
 class ToolDispatcher:
@@ -41,7 +47,13 @@ class ToolDispatcher:
         self._trusted_values = dict(trusted_values or {})
         self._default_timeout_seconds = default_timeout_seconds
 
-    async def dispatch(self, call: ToolCall) -> ToolResult:
+    async def dispatch(
+        self,
+        call: ToolCall,
+        *,
+        approval_policy: ApprovalPolicy | None = None,
+        approval_observer: ApprovalObserver | None = None,
+    ) -> ToolResult:
         tool = self._registry.get(call.name)
         if tool is None:
             return ToolResult(call_id=call.id, output="", error=f"unknown_tool: {call.name}")
@@ -52,7 +64,14 @@ class ToolDispatcher:
             details = json.dumps(exc.errors(include_url=False), ensure_ascii=False, default=str)
             return ToolResult(call_id=call.id, output="", error=f"invalid_arguments: {details}")
 
-        if await self._approval_policy.decide(call, tool) is ApprovalDecision.DENY:
+        policy = approval_policy if approval_policy is not None else self._approval_policy
+        decision = await policy.decide(call, tool)
+        if approval_observer is not None:
+            mode = policy.approval_mode_name if isinstance(policy, ApprovalModeProvider) else None
+            observation = approval_observer(call, decision, mode)
+            if inspect.isawaitable(observation):
+                await observation
+        if decision is ApprovalDecision.DENY:
             return ToolResult(call_id=call.id, output="", error=f"approval_denied: {tool.name}")
 
         for parameter in tool.injected_parameters:
