@@ -911,8 +911,10 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "pathspec" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "textual" },
     { name = "typer" },
 ]
@@ -934,8 +936,10 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pathspec", specifier = ">=1.0.4" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "textual", specifier = ">=8.2.8" },
     { name = "typer", specifier = ">=0.27.0" },
 ]

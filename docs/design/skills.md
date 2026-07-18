@@ -1,6 +1,7 @@
 # Agent Skills Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Core discovery, Context menu, Model Tool, and trusted user invocation implemented;
+> Host-generated slash commands remain a later stage.
 
 ## Purpose
 

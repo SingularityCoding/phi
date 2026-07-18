@@ -51,30 +51,36 @@ capabilities:
   completion and failure semantics.
 - **Sessions and Context** — durable conversation trees, resume and fork workflows, budgeted
   Context construction, and compaction without deleting history.
-- **Runtime integrations** — project instructions, on-demand Agent Skills, and stdio MCP tools,
-  resources, and prompts.
+- **Runtime integrations** — cwd-scoped project instructions and on-demand Agent Skills, with
+  stdio MCP tools, resources, and prompts as the next implementation boundary.
 - **Delegation** — isolated Subagent Sessions built from the same Run, Tool, Event, and Hook
   primitives as the parent Agent.
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
   services rather than separate implementations.
 
-The Model gateway, Tool processing boundary, Harness core, and Session/Context application services
-are implemented today. Phi persists versioned conversation trees with crash-aware commits, exact
-forks, branch navigation, and separate redacted Event Traces. Context construction is immutable and
-inspectable, uses deterministic request estimates plus runtime provider-Usage anchors, and supports
-manual, threshold, and bounded overflow compaction without deleting history. The public Harness
-operation runs every ordinary Step through the streaming Model protocol, processes complete Tool
-Calls sequentially, emits ordered lifecycle Events, applies behavioral Hooks, and returns a bounded
-immutable Run Result.
+The Model gateway, Tool processing boundary, Harness core, Session/Context services, and the first
+cwd-scoped runtime integrations are implemented today. Phi loads root `AGENTS.md` instructions with
+a `CLAUDE.md` fallback, discovers validated global and project Skills, assembles a stable Context
+prefix, and registers a read-only `skill_tool` through the existing Tool Registry and Dispatcher.
+Model-disabled Skills remain available through a separate trusted user-invocation API without being
+advertised to the Model.
+
+Phi persists versioned conversation trees with crash-aware commits, exact forks, branch navigation,
+and separate redacted Event Traces. Context construction is immutable and inspectable, uses
+deterministic request estimates plus runtime provider-Usage anchors, and supports manual, threshold,
+and bounded overflow compaction without deleting history. The public Harness operation runs every
+ordinary Step through the streaming Model protocol, processes complete Tool Calls sequentially,
+emits ordered lifecycle Events, applies behavioral Hooks, and returns a bounded immutable Run
+Result.
 
 `read`, `write`, `edit`, `grep`, `find`, and `ls` route file access through a FileSystem that
 canonically resolves paths, confines them to an explicit workspace root, and denies protected Git
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. The CLI and TUI remain a minimal shell while runtime integrations and later
-roadmap stages are built; the Model, Tool, Harness, Session, and Context services are not yet wired
-into an interactive Host workflow.
+filesystem race. The CLI and TUI remain a minimal shell while stdio MCP and later roadmap stages are
+built; the Model, Tool, Harness, Session, Context, and cwd runtime services are not yet wired into an
+interactive Host workflow.
 
 ## Design principles
 
