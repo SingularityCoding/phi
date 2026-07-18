@@ -7,7 +7,12 @@ from typing import Any, cast
 import httpx
 
 from phi.model.assembler import ResponseAssembler
-from phi.model.errors import ModelHTTPError, ModelProtocolError, ModelTimeoutError
+from phi.model.errors import (
+    ModelContextLimitError,
+    ModelHTTPError,
+    ModelProtocolError,
+    ModelTimeoutError,
+)
 from phi.model.events import (
     ContentDelta,
     FinishEvent,
@@ -89,7 +94,7 @@ class OpenAICompatibleModel:
             raise ModelHTTPError(status_code=0, body=str(exc)) from exc
 
         if not response.is_success:
-            raise ModelHTTPError(status_code=response.status_code, body=response.text)
+            raise _http_error(response.status_code, response.text)
 
         try:
             raw: object = response.json()
@@ -113,10 +118,7 @@ class OpenAICompatibleModel:
             ) as response:
                 if not response.is_success:
                     await response.aread()
-                    raise ModelHTTPError(
-                        status_code=response.status_code,
-                        body=response.text,
-                    )
+                    raise _http_error(response.status_code, response.text)
 
                 async for data in _iter_sse_data(response):
                     if data == "[DONE]":
@@ -171,6 +173,28 @@ class OpenAICompatibleModel:
     @property
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._config.api_key.get_secret_value()}"}
+
+
+def _http_error(status_code: int, body: str) -> ModelHTTPError:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return ModelHTTPError(status_code=status_code, body=body)
+    if isinstance(payload, dict):
+        raw_error = payload.get("error")
+        if isinstance(raw_error, dict):
+            context_limit_codes = {
+                "context_length_exceeded",
+                "context_window_exceeded",
+                "max_context_length_exceeded",
+            }
+            structured_values = (raw_error.get("code"), raw_error.get("type"))
+            if any(
+                isinstance(value, str) and value in context_limit_codes
+                for value in structured_values
+            ):
+                return ModelContextLimitError(status_code=status_code, body=body)
+    return ModelHTTPError(status_code=status_code, body=body)
 
 
 def serialize_tool_result(result: ToolResult) -> dict[str, str]:

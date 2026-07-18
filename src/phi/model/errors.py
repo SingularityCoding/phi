@@ -14,6 +14,10 @@ class ModelHTTPError(ModelError):
         super().__init__(f"Model HTTP request failed with status {status_code}: {body}")
 
 
+class ModelContextLimitError(ModelHTTPError):
+    """A provider rejected a request using a structured Context-limit error code."""
+
+
 class ModelProtocolError(ModelError):
     """A successful transport response that violates the Model protocol."""
 

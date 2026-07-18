@@ -1,7 +1,13 @@
 """Stateless Model protocol boundary and normalized domain values."""
 
 from phi.model.assembler import ResponseAssembler
-from phi.model.errors import ModelError, ModelHTTPError, ModelProtocolError, ModelTimeoutError
+from phi.model.errors import (
+    ModelContextLimitError,
+    ModelError,
+    ModelHTTPError,
+    ModelProtocolError,
+    ModelTimeoutError,
+)
 from phi.model.events import (
     ContentDelta,
     FinishEvent,
@@ -33,6 +39,7 @@ __all__ = [
     "FinishEvent",
     "Model",
     "ModelConfig",
+    "ModelContextLimitError",
     "ModelError",
     "ModelEvent",
     "ModelHTTPError",

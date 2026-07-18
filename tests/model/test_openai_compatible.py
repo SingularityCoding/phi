@@ -9,6 +9,7 @@ from phi.model import (
     ContentDelta,
     FinishEvent,
     ModelConfig,
+    ModelContextLimitError,
     ModelHTTPError,
     ModelProtocolError,
     ModelRequest,
@@ -357,6 +358,36 @@ async def test_http_error_retains_status_and_body():
 
     assert raised.value.status_code == 401
     assert raised.value.body == '{"error":"invalid virtual key"}'
+
+
+async def test_context_limit_http_error_is_typed_from_structured_provider_data():
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                400,
+                json={"error": {"code": "context_length_exceeded", "message": "too long"}},
+            )
+        )
+    ) as client:
+        with pytest.raises(ModelContextLimitError):
+            await OpenAICompatibleModel(model_config(), client=client).request(
+                ModelRequest(messages=[])
+            )
+
+
+async def test_malformed_structured_error_fields_remain_a_generic_http_failure():
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                400,
+                json={"error": {"code": ["unexpected"], "type": {"nested": True}}},
+            )
+        )
+    ) as client:
+        with pytest.raises(ModelHTTPError):
+            await OpenAICompatibleModel(model_config(), client=client).request(
+                ModelRequest(messages=[])
+            )
 
 
 async def test_timeout_is_translated_to_model_timeout_error():

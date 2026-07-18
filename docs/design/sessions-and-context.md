@@ -1,6 +1,7 @@
 # Sessions and Context Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Design and core application-service implementation complete; Host integration is a
+> later roadmap stage.
 
 ## Concepts
 

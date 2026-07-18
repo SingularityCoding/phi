@@ -15,7 +15,7 @@ from phi.model.events import (
 )
 from phi.model.types import ModelRequest, ModelResponse
 
-type ScriptEntry = ModelResponse | Sequence[ModelEvent]
+type ScriptEntry = ModelResponse | Sequence[ModelEvent] | Exception
 
 
 class ScriptedModel:
@@ -37,6 +37,8 @@ class ScriptedModel:
             raise RuntimeError("ScriptedModel response script exhausted")
 
         entry = self._script.popleft()
+        if isinstance(entry, Exception):
+            raise entry
         if isinstance(entry, ModelResponse):
             for event in _events_from_response(entry):
                 yield event

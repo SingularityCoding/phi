@@ -58,21 +58,23 @@ capabilities:
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
   services rather than separate implementations.
 
-The Model gateway, Tool processing boundary, and Harness core are implemented today. In addition to
-streaming and non-streaming Model transport, Phi now has a schema-derived Tool registry, strict
-local argument validation, Approval Policy presets, asynchronous dispatch with timeout and
-cancellation semantics, and seven built-in Tools. The public Harness operation runs every ordinary
-Step through the streaming Model protocol, processes complete Tool Calls sequentially, emits
-ordered lifecycle Events, applies behavioral Hooks, and returns a bounded immutable Run Result.
+The Model gateway, Tool processing boundary, Harness core, and Session/Context application services
+are implemented today. Phi persists versioned conversation trees with crash-aware commits, exact
+forks, branch navigation, and separate redacted Event Traces. Context construction is immutable and
+inspectable, uses deterministic request estimates plus runtime provider-Usage anchors, and supports
+manual, threshold, and bounded overflow compaction without deleting history. The public Harness
+operation runs every ordinary Step through the streaming Model protocol, processes complete Tool
+Calls sequentially, emits ordered lifecycle Events, applies behavioral Hooks, and returns a bounded
+immutable Run Result.
 
 `read`, `write`, `edit`, `grep`, `find`, and `ls` route file access through a FileSystem that
 canonically resolves paths, confines them to an explicit workspace root, and denies protected Git
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. The CLI and TUI remain a minimal shell while Sessions, Context, and later roadmap
-stages are built; the Model, Tool, and Harness boundaries are not yet wired into an interactive
-Session.
+filesystem race. The CLI and TUI remain a minimal shell while runtime integrations and later
+roadmap stages are built; the Model, Tool, Harness, Session, and Context services are not yet wired
+into an interactive Host workflow.
 
 ## Design principles
 
