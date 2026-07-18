@@ -13,7 +13,7 @@ from phi.tools.approval import (
     RuleBasedApprovalPolicy,
     RuleDecision,
 )
-from phi.tools.dispatcher import ToolDispatcher, ToolFailure
+from phi.tools.dispatcher import ApprovalObserver, ToolDispatcher, ToolFailure
 from phi.tools.registry import ToolRegistry, build_default_registry
 from phi.tools.types import ApprovalClass, Injected, Tool, tool
 
@@ -25,6 +25,7 @@ __all__ = [
     "ApprovalClass",
     "ApprovalDecision",
     "ApprovalMode",
+    "ApprovalObserver",
     "ApprovalPolicy",
     "ApprovalRule",
     "AskResolution",

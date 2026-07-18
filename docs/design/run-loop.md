@@ -1,6 +1,6 @@
 # Run, Events, and Hooks Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Implemented.
 
 ## Run model
 
@@ -19,7 +19,7 @@ class Step:
     index: int
     request: ModelRequest
     response: ModelResponse
-    tool_results: list[ToolResult]
+    tool_results: tuple[ToolResult, ...]
 
 @dataclass(frozen=True)
 class RunResult:
@@ -73,7 +73,10 @@ task boundary.
 
 ## Events
 
-Events are immutable notifications. Listener return values never affect behavior.
+Events are immutable notifications. Every Event carries the Run identifier and a zero-based Event
+index; Model and Tool lifecycle Events also carry the zero-based Step index. Mutable Model payloads
+are delivered as observation snapshots so a listener cannot change the active Run. Listener return
+values never affect behavior.
 
 - `RunStarted(run_id)`
 - `ModelCallStarted(step_index, request)`
@@ -111,22 +114,24 @@ class RunDecision(Enum):
     ACCEPT = "accept"
     RETRY = "retry"
 
-@dataclass
+@dataclass(frozen=True)
+class CompletionDecision:
+    decision: RunDecision
+    feedback: str | None = None
+
+@dataclass(frozen=True)
 class Hooks:
     before_tool_call: ApprovalPolicy | None = None
-    before_run_complete: Callable[[RunResult], Awaitable[RunDecision]] | None = None
+    before_run_complete: Callable[[RunResult], Awaitable[CompletionDecision]] | None = None
     inject_messages: Callable[[], Awaitable[list[str]]] | None = None
 ```
 
 - `before_tool_call` is the Approval Policy used before executing a tool.
 - `before_run_complete` accepts a provisional result or asks the same loop to continue under the
-  same Step budget.
+  same Step budget. `RETRY` requires non-empty corrective feedback, which is appended after the
+  provisional Assistant message; `ACCEPT` carries no feedback.
 - `inject_messages` drains non-destructive steering messages at Step boundaries. It does not cancel
   or restart the Run.
-
-The concrete representation of corrective feedback returned with a retry decision remains an
-implementation detail that must be settled when the hook lands; the loop must not invent unbounded
-external retries.
 
 Additional generic hooks are not created until a real capability needs them.
 

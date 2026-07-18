@@ -23,10 +23,12 @@ Implemented today:
 - canonical workspace Confinement with protected repository and dotenv paths;
 - schema-derived Tool registration, strict argument validation, Approval Policy, and async dispatch;
 - confined `read`, `write`, `edit`, `grep`, `find`, and `ls` Tools plus explicitly unconfined `bash`;
+- bounded asynchronous Runs with immutable Step results, streaming Events, behavioral Hooks,
+  sequential Tool round trips, failure policy, and cancellation propagation;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next implementation boundary is the Harness core.
+The next implementation boundary is Sessions and Context.
 
 ## v1 capability scope
 
@@ -36,7 +38,7 @@ The next implementation boundary is the Harness core.
 | Scripted Model and offline protocol tests | Complete | Implemented |
 | Confined Environment and file/process result types | Complete | Implemented |
 | Tool registry, dispatcher, approvals, built-in tools | Complete | Implemented |
-| Bounded Run, Events, Hooks, cancellation | Complete | Not started |
+| Bounded Run, Events, Hooks, cancellation | Complete | Implemented |
 | Session entries, JSONL storage, resume, fork | Complete | Not started |
 | Context construction and compaction | Complete | Not started |
 | Project instructions and Agent Skills | Complete | Not started |
