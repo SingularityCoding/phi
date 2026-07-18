@@ -1,7 +1,8 @@
 # Step 04：用 `TaskGroup` 表达结构化并发
 
-并发不只关心“如何同时开始”，还要回答：**这些子任务属于谁，作用域结束时谁保证它们都
-已经完成或被清理？** Python 3.12 的 `asyncio.TaskGroup` 把答案写进代码结构。
+并发不只是「怎么同时开始」这么简单，还有一个更容易被忽略的问题：**这些子任务到底属于
+谁？作用域结束的时候，谁来保证它们都已经完成，或者已经被妥善清理？** Python 3.12 的
+`asyncio.TaskGroup` 把这个答案直接写进了代码结构里，让你不用靠自觉去记住。
 
 ## `async with` 的作用
 
@@ -28,6 +29,7 @@
 ## 完整代码：`step_04_task_group.py`
 
 ```python
+# Step 04：用 TaskGroup 表达「这些子任务属于谁、作用域结束时必须都已完成或清理」。
 import asyncio
 import time
 from collections.abc import Sequence
@@ -57,6 +59,9 @@ async def collect(
     log = event_log or EventLog()
     tasks: list[asyncio.Task[list[SearchResult]]] = []
 
+    # 进入 async with 就开启了一个「子任务所有权」作用域：
+    # 正常离开这个作用域之前，TaskGroup 会等待组里所有 Task 完成；
+    # 如果有任务失败或被取消，它也会负责取消并等待其余未完成的兄弟任务。
     async with asyncio.TaskGroup() as task_group:
         for source in sources:
             task = task_group.create_task(
@@ -65,6 +70,7 @@ async def collect(
             )
             tasks.append(task)
 
+    # 走到这里，作用域已经退出，所有 Task 保证已经结束，读取 result() 是安全的。
     results = [result for task in tasks for result in task.result()]
     return results, log
 
@@ -138,5 +144,3 @@ uv run pytest tests/test_steps.py -k task_group
     如果一个 `TaskGroup` 子任务抛出未处理异常，组会取消其他未完成子任务，并在退出时通过
     `ExceptionGroup` 报告失败。`except*` 和多异常聚合不属于本 Lab 的 Readiness Check；
     Phi 正式实现需要时会在具体失败策略中讨论。
-
-[下一步：阻塞 event loop →](05-blocking.md)

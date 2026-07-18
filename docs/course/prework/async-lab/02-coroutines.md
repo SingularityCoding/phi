@@ -1,12 +1,12 @@
 # Step 02：Coroutine 与顺序 `await`
 
-现在只做两处看似关键的改动：把 `search()` 和 `collect()` 声明为 `async def`，把
-`time.sleep()` 改成 `await asyncio.sleep()`。先不要创建 Tasks。
+这一页只做两处改动，但很关键：把 `search()` 和 `collect()` 声明为 `async def`，把
+`time.sleep()` 换成 `await asyncio.sleep()`。先别急着创建 Task，一步一步来。
 
-## `async def` 调用时发生什么
+## 调用 `async def` 函数时，到底发生了什么
 
-普通函数调用会立刻进入函数体；调用 `async def` 函数只会创建一个 **coroutine object**。
-函数体尚未开始执行。
+调用普通函数会立刻进入函数体执行；但调用一个 `async def` 函数，得到的只是一个
+**coroutine object**——函数体其实还没开始跑。这一点很反直觉，值得停下来看看：
 
 ```python
 coroutine = search(SOURCES[0], QUERY, EventLog())
@@ -14,8 +14,8 @@ print(coroutine)
 coroutine.close()
 ```
 
-`await coroutine` 会在当前 Task 中驱动它；`asyncio.create_task(coroutine)` 则会把它包装成
-由 event loop 调度的 Task。Task 留到下一页。
+`await coroutine` 会在当前 Task 里驱动它往前走；`asyncio.create_task(coroutine)` 则会把它
+包了一层，交给 event loop 去调度成一个 Task。Task 到底是什么，我们放到下一页细说。
 
 ## 先预测
 
@@ -30,6 +30,8 @@ coroutine.close()
 ## 完整代码：`step_02_sequential_async.py`
 
 ```python
+# Step 02：加上了 async/await，但还没有并发——这一步专门用来打破
+# 「函数标了 async 就会自动并发」这个常见误解。
 import asyncio
 import time
 from collections.abc import Sequence
@@ -44,6 +46,8 @@ QUERY = "How do I cancel async work safely?"
 async def search(source: SourceSpec, query: str, event_log: EventLog) -> list[SearchResult]:
     event_log.record(source.name, EventKind.STARTED, query)
     event_log.record(source.name, EventKind.WAITING, f"{source.delay:.2f}s")
+    # 换成 await asyncio.sleep()：这里会把控制权交还 event loop，
+    # 但此刻还没有其他 Task 存在，所以没人能利用这段空隙。
     await asyncio.sleep(source.delay)
     event_log.record(source.name, EventKind.RESUMED)
     results = materialize(source, query)
@@ -58,6 +62,7 @@ async def collect(
 ) -> tuple[list[SearchResult], EventLog]:
     log = event_log or EventLog()
     results: list[SearchResult] = []
+    # 依旧是顺序 await：本次 search() 完整返回后，下一次循环才会调用下一个 search()。
     for source in sources:
         results.extend(await search(source, query, log))
     return results, log
@@ -71,6 +76,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # 只有最外层、还没有 event loop 的入口才调用 asyncio.run()。
     asyncio.run(main())
 ```
 
@@ -172,5 +178,3 @@ async def test_sequential_awaits_still_finish_before_starting_the_next_source() 
 
 测试本身也遵循相同规则：pytest 拥有最外层 loop，测试函数使用 `await`，而不是调用
 `asyncio.run()`。
-
-[下一步：Tasks 与 event loop →](03-tasks.md)

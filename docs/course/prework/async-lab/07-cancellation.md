@@ -1,8 +1,8 @@
 # Step 07：Timeout、cancellation 与 cleanup
 
-并发工作的完成路径必须是有界的。调用者可能设置 deadline，用户也可能主动取消。正确的
-异步代码不能只“发出取消信号”，还要等待被取消的 Task 完成清理，并让调用者看见真实终止
-状态。
+这是 Lab 主线的最后一站。并发工作总得有个边界——调用者可能设置了 deadline，用户也可能
+中途主动取消。写对的异步代码不能只是「发个取消信号就完事了」，还得等被取消的 Task 真的
+完成清理，并且让调用者看到真实发生了什么。
 
 ## Cancellation 是请求，不是瞬间终止
 
@@ -22,6 +22,8 @@ caller: task.cancel()
 ## 完整代码：`step_07_cancellation.py`
 
 ```python
+# Step 07：取消是一个请求，不是瞬间终止——必须等待被取消的 Task 完成清理，
+# 并让调用者观察到真实的终止状态。
 import asyncio
 from collections.abc import Sequence
 
@@ -41,9 +43,11 @@ async def search(source: SourceSpec, query: str, event_log: EventLog) -> list[Se
         event_log.record(source.name, EventKind.COMPLETED, f"{len(results)} results")
         return results
     except asyncio.CancelledError:
+        # 只记录，然后必须 re-raise：吞掉 CancelledError 会让调用者误以为任务正常完成。
         event_log.record(source.name, EventKind.CANCELLED)
         raise
     finally:
+        # 无论正常完成、异常还是被取消，finally 都会执行，适合在这里释放资源。
         event_log.record(source.name, EventKind.CLEANED)
 
 
@@ -56,6 +60,8 @@ async def collect_with_deadline(
     log = event_log or EventLog()
     tasks: list[asyncio.Task[list[SearchResult]]] = []
 
+    # asyncio.timeout() 到期时通过 cancellation 中断当前等待；
+    # 嵌套的 TaskGroup 会取消并等待尚未完成的子任务，退出后调用者看到 TimeoutError。
     async with asyncio.timeout(timeout_seconds):
         async with asyncio.TaskGroup() as task_group:
             for source in sources:
@@ -82,8 +88,10 @@ async def run_explicit_cancel_demo(source: SourceSpec = SOURCES[0]) -> EventLog:
     task = asyncio.create_task(search(source, QUERY, event_log), name="search-to-cancel")
 
     await asyncio.sleep(0.02)
+    # cancel() 只是发出请求，Task 要到下一个可挂起点才会真正观察到 CancelledError。
     task.cancel()
     try:
+        # 调用者必须继续 await task，才能等到 cleanup 完成并观察到真实的终止状态。
         await task
     except asyncio.CancelledError:
         event_log.record("caller", EventKind.OBSERVED, "CancelledError")
@@ -204,5 +212,3 @@ Lab 不是 Agent，也没有提前引入 Model、Harness 或 Textual，但异步
 
 这只是运行结构的映射，不代表数据源是 Model，也不代表 UI 拥有 Harness 控制循环。正课会继续
 使用 Phi 的规范领域语言。
-
-[进入 Async Readiness Check →](readiness-check.md)

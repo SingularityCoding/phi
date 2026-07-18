@@ -1,10 +1,11 @@
 # Step 06：用 `async for` 消费流式结果
 
-前面的 `search()` 等待整个数据源完成后一次返回列表。真实 I/O 经常分批到达；LLM
-streaming 也不会等完整响应生成后才交付所有内容。Async iterator 允许调用者等待“下一批”
-数据。
+前面几页的 `search()` 都是等整个数据源处理完，一次性把列表返回给你。但现实中的 I/O 经常
+是分批到达的——LLM 的 streaming 响应也不会等全部内容生成完才一次性交付。Async iterator
+就是用来让调用者可以一批一批地等「下一份」数据。
 
-本 Lab 只让 `docs` 单个数据源流式返回。多生产者合并、Queue 和背压不在必修范围。
+这一页只让 `docs` 这一个数据源以流式方式返回结果，先建立好这个心智模型。多个生产者合并、
+Queue、背压这些更复杂的话题不在这次的必修范围内。
 
 ## 先预测
 
@@ -20,6 +21,7 @@ tick？
 ## 完整代码：`step_06_async_iteration.py`
 
 ```python
+# Step 06：用 async for 一边消费流式结果，一边让另一个 progress Task 继续推进。
 import asyncio
 from collections.abc import AsyncIterator
 
@@ -41,8 +43,12 @@ async def stream(
 
     for result in results:
         event_log.record(source.name, EventKind.WAITING, result.title)
+        # 每次 yield 前都会 await，这是一个真正的挂起点：
+        # progress Task 正是趁这个空隙才有机会运行。
         await asyncio.sleep(delay_per_result)
         event_log.record(source.name, EventKind.RESUMED, result.title)
+        # yield 把当前结果交给调用者，同时记住这里的执行位置，
+        # 下次被 __anext__ 驱动时从这里继续。
         yield result
 
     event_log.record(source.name, EventKind.COMPLETED, f"{len(results)} chunks")
@@ -56,11 +62,14 @@ async def consume(
 ) -> list[SearchResult]:
     results: list[SearchResult] = []
     try:
+        # consume() 和 stream() 属于同一条调用链，不是两个并发 Task；
+        # 真正独立的另一个 Task 是下面的 show_progress()。
         async for result in stream(source, query, event_log):
             results.append(result)
             event_log.record("consumer", EventKind.OBSERVED, result.title)
         return results
     finally:
+        # 不管正常结束还是被打断，都要通知 progress 该停下来了。
         finished.set()
 
 
@@ -175,5 +184,3 @@ uv run pytest tests/test_steps.py -k async_iterator
 
 测试验证三个结果保持流式顺序，同时至少有一个 progress tick 出现在运行期间。它不要求
 固定 tick 数量，因为调度速度不是业务契约。
-
-[下一步：Timeout、cancellation 与 cleanup →](07-cancellation.md)

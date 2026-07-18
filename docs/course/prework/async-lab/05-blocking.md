@@ -1,7 +1,8 @@
 # Step 05：`async def` 也会阻塞 event loop
 
-`async` 只允许函数在明确的异步边界挂起；它不会把函数体中的普通 Python 自动变成可抢占
-代码。这一页同时运行“检索”和“心跳”，然后故意在检索中调用 `time.sleep()`。
+`async` 只是允许函数在明确的位置挂起，它并不会把函数体里的普通 Python 代码自动变成
+「随时可以被打断」的代码。这一页我们同时跑「检索」和「心跳」两个任务，然后故意在检索
+里塞一行 `time.sleep()`，看看会发生什么。
 
 ## 先预测
 
@@ -16,6 +17,8 @@
 ## 完整代码：`step_05_blocking.py`
 
 ```python
+# Step 05：证明「async def」不会自动让函数体变得可抢占——
+# 阻塞调用还是会冻结同一个 event loop 上的其他 Task。
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
@@ -28,6 +31,8 @@ BLOCK_SECONDS = 0.12
 async def blocking_search(event_log: EventLog) -> None:
     event_log.record("search", EventKind.STARTED, "blocking version")
     event_log.record("search", EventKind.WAITING, f"time.sleep({BLOCK_SECONDS:.2f})")
+    # 故意用同步的 time.sleep()：即使外面套了 async def，这一行也不会把控制权交还
+    # event loop，同一个 loop 上的 heartbeat 完全无法推进。
     time.sleep(BLOCK_SECONDS)
     event_log.record("search", EventKind.COMPLETED)
 
@@ -35,6 +40,7 @@ async def blocking_search(event_log: EventLog) -> None:
 async def cooperative_search(event_log: EventLog) -> None:
     event_log.record("search", EventKind.STARTED, "cooperative version")
     event_log.record("search", EventKind.WAITING, f"asyncio.sleep({BLOCK_SECONDS:.2f})")
+    # 换成 await asyncio.sleep()：这才是一个真正的挂起点，heartbeat 得以插入执行。
     await asyncio.sleep(BLOCK_SECONDS)
     event_log.record("search", EventKind.RESUMED)
     event_log.record("search", EventKind.COMPLETED)
@@ -50,6 +56,8 @@ async def heartbeat(event_log: EventLog) -> None:
 
 async def run_pair(operation: Callable[[EventLog], Awaitable[None]]) -> EventLog:
     event_log = EventLog()
+    # search 和 heartbeat 是同一个 event loop 上的两个平级 Task，
+    # 谁能推进完全取决于谁先让出控制权。
     async with asyncio.TaskGroup() as task_group:
         task_group.create_task(operation(event_log))
         task_group.create_task(heartbeat(event_log))
@@ -151,5 +159,3 @@ heartbeat 在搜索完成前已经开始。
     如果第三方同步 API 无法替换，可以用 `await asyncio.to_thread(sync_function, ...)` 把它
     移到工作线程。但这不是把同步函数变成 coroutine；取消等待它的 Task 也不代表底层线程
     已经停止。`to_thread()` 不属于 Readiness Check，主线优先使用原生异步 API。
-
-[下一步：Async iterator 与 streaming →](06-async-iteration.md)

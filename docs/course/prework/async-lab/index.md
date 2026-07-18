@@ -1,18 +1,19 @@
 # Python Async Lab
 
-这个 Lab 面向已经会写 Python、但尚未建立 `async` / `await` 心智模型的学生。你不会从零
-实现一个项目，而是沿着一组完整、可运行的 checkpoints 做“预测—运行—破坏—解释”。
+如果你已经会写 Python，但 `async` / `await` 在你脑子里还没形成清晰的画面——这个 Lab 就是
+为你准备的。你不会从零搭一个项目，而是沿着一组完整、可以直接运行的 checkpoints，一步步
+「预测—运行—破坏—解释」，亲眼看看并发到底是怎么发生的。
 
-预计总时长为 **2–3 小时**。
+整个过程大约需要 **2–3 小时**。
 
-!!! tip "已经熟悉异步编程？"
+!!! tip "已经比较熟悉异步编程？"
 
-    直接完成 [Async Readiness Check](readiness-check.md)。如果你能完整解释所有答案，就不必
-    逐页完成 Lab；任何答错或不确定的题都会链接回对应 checkpoint。
+    可以先直接做 [Async Readiness Check](readiness-check.md)。如果你能完整解释所有答案，
+    就不必逐页过一遍 Lab；哪道题答得不确定，它会直接链接回对应的 checkpoint。
 
-## 完成标准
+## 做完这个 Lab，你应该能
 
-完成后，你应该能够：
+学完之后，你应该能够：
 
 - 区分普通函数、coroutine 与 `asyncio.Task`；
 - 解释 event loop 如何在明确的挂起点调度 Tasks；
@@ -24,12 +25,13 @@
 - 判断谁应该调用 `asyncio.run()`；
 - 阅读并运行确定性的异步 pytest。
 
-Lab 不试图覆盖整个 `asyncio`。`gather()`、Queue、多数据源流式合并、`ExceptionGroup`、
-`to_thread()`、线程与真实网络都不在必修路径中。
+这个 Lab 不追求覆盖整个 `asyncio`。`gather()`、Queue、多数据源流式合并、
+`ExceptionGroup`、`to_thread()`、线程和真实网络请求都不在这次的范围里，用不上就先不管，
+以后遇到了再学。
 
-## 贯穿项目
+## 贯穿全程的例子
 
-项目是一个多源开发文档检索器。查询会发送给三个固定数据源：
+整个 Lab 用同一个例子：一个多源开发文档检索器。一次查询会发给三个固定的数据源：
 
 | 数据源 | 模拟内容 | 等待时间 |
 | --- | --- | ---: |
@@ -37,10 +39,10 @@ Lab 不试图覆盖整个 `asyncio`。`gather()`、Queue、多数据源流式合
 | `issues` | Issue tracker 结果 | 0.08 秒 |
 | `notes` | 团队笔记结果 | 0.04 秒 |
 
-等待时间只是帮助观察的演示数据。自动测试不以精确毫秒数判断对错，而是断言事件顺序、
-任务状态与清理结果。
+这些等待时间只是为了让你能肉眼观察到差异，测试本身不会按精确的毫秒数判断对错，而是看
+事件发生的顺序、任务的状态和清理是否到位。
 
-## 获取代码
+## 拿到代码，跑起来
 
 ```bash
 git clone https://github.com/SingularityCoding/phi-async-lab.git
@@ -49,10 +51,10 @@ uv sync --locked
 uv run pytest
 ```
 
-项目由 uv 管理，运行时代码只使用 Python 3.12 标准库。`pytest`、`pytest-asyncio` 和 Ruff
-属于开发依赖。
+项目由 uv 管理，运行时代码只用 Python 3.12 标准库，不依赖任何第三方包。`pytest`、
+`pytest-asyncio` 和 Ruff 只是开发时用得上。
 
-`pyproject.toml` 完整配置如下。`uv.lock` 由 `uv lock` 生成，不手工编辑：
+完整的 `pyproject.toml` 配置如下（`uv.lock` 由 `uv lock` 自动生成，不需要手工编辑）：
 
 ```toml
 [project]
@@ -113,12 +115,15 @@ phi-async-lab/
 └── tests/test_steps.py
 ```
 
-每个 `step_*.py` 都是完整、可独立运行的程序。共享文件只负责固定数据、事件记录和输出；
-它们不会替学生隐藏并发控制流。
+每个 `step_*.py` 都是完整、可以独立运行的程序，是你真正要读、要改的地方。三个共享文件
+只负责固定数据、事件记录和打印输出，不会替你把并发控制流藏起来——真正决定「谁先跑、谁
+等谁」的代码，永远在 `step_*.py` 里明明白白地写着。
 
 ## 共享场景：`scenario.py`
 
 ```python
+# 所有 checkpoint 共用同一个「多源检索」场景和同一份固定数据，
+# 这样每一页文档改变的只有并发控制流本身，而不是业务逻辑。
 from dataclasses import dataclass
 
 
@@ -138,10 +143,12 @@ class ResultTemplate:
 @dataclass(frozen=True, slots=True)
 class SourceSpec:
     name: str
-    delay: float
+    delay: float  # 模拟这个数据源的响应耗时，只用于制造可观察的等待
     results: tuple[ResultTemplate, ...]
 
 
+# 三个数据源的延迟故意拉开差距（0.12 / 0.08 / 0.04 秒），
+# 这样顺序等待与并发等待的耗时差异在肉眼和测试里都足够明显。
 SOURCES = (
     SourceSpec(
         name="docs",
@@ -172,6 +179,8 @@ SOURCES = (
 
 
 def materialize(source: SourceSpec, query: str) -> list[SearchResult]:
+    # 这是一个普通同步函数：生成结果本身不涉及等待，
+    # 「等待」这件事总是由调用它的 checkpoint 代码显式表达（sleep / await sleep）。
     return [
         SearchResult(
             source=source.name,
@@ -185,26 +194,28 @@ def materialize(source: SourceSpec, query: str) -> list[SearchResult]:
 ## 共享事件日志：`events.py`
 
 ```python
+# 整个 Lab 用同一套「事件日志」记录发生了什么、以及发生的先后顺序。
+# 墙钟时间（秒数）只用来建立直觉，真正稳定、可断言的是这里的事件序号和顺序。
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 
 class EventKind(StrEnum):
-    STARTED = "started"
-    WAITING = "waiting"
-    RESUMED = "resumed"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    CLEANED = "cleaned"
-    TICK = "tick"
-    TIMED_OUT = "timed_out"
-    OBSERVED = "observed"
+    STARTED = "started"  # 一段工作开始
+    WAITING = "waiting"  # 即将进入等待（例如 await 一个 sleep 或 I/O）
+    RESUMED = "resumed"  # 等待结束，代码从挂起点恢复执行
+    COMPLETED = "completed"  # 工作正常完成
+    CANCELLED = "cancelled"  # 收到取消信号（CancelledError）
+    CLEANED = "cleaned"  # finally 块完成清理
+    TICK = "tick"  # 后台任务（如心跳/进度）的一次周期性输出
+    TIMED_OUT = "timed_out"  # 调用者观察到超时
+    OBSERVED = "observed"  # 调用者观察到某个结果或异常
 
 
 @dataclass(frozen=True, slots=True)
 class Event:
-    sequence: int
-    actor: str
+    sequence: int  # 逻辑发生顺序，不是时间戳——多次运行的耗时会变，顺序不会
+    actor: str  # 谁产生了这个事件（某个数据源、caller、heartbeat 等）
     kind: EventKind
     detail: str = ""
 
@@ -218,6 +229,8 @@ class EventLog:
     _events: list[Event] = field(default_factory=list)
 
     def record(self, actor: str, kind: EventKind, detail: str = "") -> None:
+        # 序号按 record() 被调用的顺序自增，因此它反映的是「谁先让出/拿回控制权」，
+        # 而不是「谁先被写在代码里」。
         self._events.append(Event(len(self._events) + 1, actor, kind, detail))
 
     @property
@@ -228,11 +241,13 @@ class EventLog:
         return "\n".join(event.render() for event in self._events)
 ```
 
-事件编号是逻辑顺序，不是时间戳。墙钟时间帮助建立直觉，事件日志和测试才是行为事实。
+事件编号反映的是逻辑发生顺序，不是时间戳。墙钟时间只是帮你建立直觉，真正说了算的是事件
+日志和测试里断言的这些顺序关系。
 
 ## 共享输出：`reporting.py`
 
 ```python
+# 统一的输出格式，让每个 checkpoint 的 main() 都不用自己拼报告。
 from collections.abc import Sequence
 
 from phi_async_lab.events import EventLog
@@ -250,7 +265,7 @@ def print_report(
     print(event_log.render())
     print()
     print(f"results: {len(results)}")
-    print(f"elapsed: {elapsed:.2f}s")
+    print(f"elapsed: {elapsed:.2f}s")  # 仅供直观感受，判断对错请看 event_log 里的顺序
 ```
 
 ## 学习路径
@@ -263,5 +278,3 @@ def print_report(
 6. [Async iterator](06-async-iteration.md)：一边接收流式结果，一边更新进度；
 7. [Timeout 与 cancellation](07-cancellation.md)：清理并等待被取消的工作；
 8. [Async Readiness Check](readiness-check.md)：验证是否具备进入 Phi 正课的异步基础。
-
-[开始 Step 01 →](01-sync-baseline.md)

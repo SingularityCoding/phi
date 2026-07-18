@@ -1,7 +1,8 @@
 # Step 01：从同步基线开始
 
-异步编程要解决的不是“如何让函数名看起来更现代”，而是：**当一个任务只能等待外部结果
-时，同一个线程能否先推进别的工作？** 在改变代码前，先观察熟悉的同步版本。
+异步编程真正要解决的问题不是「让函数名看起来更现代」，而是：**当一段代码只能干等外部
+结果的时候，同一个线程能不能先去干点别的？** 在改动任何代码之前，我们先看看你已经很
+熟悉的同步版本长什么样。
 
 ## 先预测
 
@@ -16,6 +17,7 @@
 ## 完整代码：`step_01_sync.py`
 
 ```python
+# Step 01：同步基线。没有 async，也没有并发——三个数据源严格排队执行。
 import time
 from collections.abc import Sequence
 
@@ -29,6 +31,7 @@ QUERY = "How do I cancel async work safely?"
 def search(source: SourceSpec, query: str, event_log: EventLog) -> list[SearchResult]:
     event_log.record(source.name, EventKind.STARTED, query)
     event_log.record(source.name, EventKind.WAITING, f"{source.delay:.2f}s")
+    # time.sleep() 是阻塞调用：线程原地等待，没有把控制权让给任何人。
     time.sleep(source.delay)
     event_log.record(source.name, EventKind.RESUMED)
     results = materialize(source, query)
@@ -43,6 +46,7 @@ def collect(
 ) -> tuple[list[SearchResult], EventLog]:
     log = event_log or EventLog()
     results: list[SearchResult] = []
+    # 普通 for 循环 + 普通函数调用：下一个 search() 必须等上一个完整返回才会开始。
     for source in sources:
         results.extend(search(source, query, log))
     return results, log
@@ -85,19 +89,21 @@ results: 7
 elapsed: 0.24s
 ```
 
-`time.sleep()` 代表一次阻塞等待。线程在这段时间不能推进 `collect()`，所以第二个数据源连
-`started` 事件都无法记录。CPU 并没有忙于计算，但程序也没有利用这段等待时间。
+`time.sleep()` 就是一次实打实的阻塞等待。线程在这段时间里没法推进 `collect()`，所以第
+二个数据源连 `started` 事件都记录不上。CPU 其实没在忙着计算什么，但这段等待时间也完全
+没被利用起来——这就是同步代码最大的浪费。
 
-## 建立第一个模型
+## 建立你的第一个心智模型
 
-可以把当前线程想成只有一个工作人员：他把请求交给 `docs` 后，站在原地等到结果返回，
-才去处理下一张任务卡。这个比喻只描述同步等待；后面 event loop 不会真的增加工作人员，
-而是让同一个线程在某张任务卡等待时切换到另一张已经可以推进的任务卡。
+可以把当前线程想象成只有一个工作人员：他把请求交给 `docs` 后，就站在原地干等结果，
+等到了才肯去处理下一张任务卡。这个比喻只描述同步等待；后面你会看到，event loop 并不会
+真的多请几个工作人员，而是让同一个工作人员在某张任务卡还在等待时，先去处理另一张已经
+能往前推进的任务卡。
 
-## 微实验：改变最慢数据源
+## 微实验：故意调慢一个数据源
 
-把 `scenario.py` 中 `docs.delay` 从 `0.12` 改成 `0.50`，再次运行。先预测：只有 `docs`
-变慢，`issues` 和 `notes` 的开始时间会不会也被推迟？
+把 `scenario.py` 里 `docs.delay` 从 `0.12` 改成 `0.50`，再运行一次。先猜猜看：只有
+`docs` 变慢了，`issues` 和 `notes` 的开始时间会不会也跟着被拖后？
 
 ??? success "展开解释"
 
@@ -125,5 +131,3 @@ for current, following in zip(FAST_SOURCES, FAST_SOURCES[1:], strict=False):
         event_log.events, following.name, EventKind.STARTED
     )
 ```
-
-[下一步：Coroutine 与顺序 await →](02-coroutines.md)

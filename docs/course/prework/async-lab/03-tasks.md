@@ -1,6 +1,7 @@
 # Step 03：Tasks 与 event loop
 
-上一页只有一条检索调用链。现在先为三个 coroutine 分别创建 Task，再等待结果。
+上一页从头到尾只有一条调用链在跑。这一页我们换个写法：先给三个 coroutine 分别创建
+Task，然后再去等结果——就是这么一个小改动，会让请求真正开始交错运行。
 
 ## Coroutine 与 Task 不是同一个东西
 
@@ -22,6 +23,7 @@
 ## 完整代码：`step_03_tasks.py`
 
 ```python
+# Step 03：先把三个 coroutine 都包装成 Task 再等待，请求才真正开始交错推进。
 import asyncio
 import time
 from collections.abc import Sequence
@@ -49,6 +51,8 @@ async def collect(
     event_log: EventLog | None = None,
 ) -> tuple[list[SearchResult], EventLog]:
     log = event_log or EventLog()
+    # 关键区别在这里：三个 Task 在进入等待循环之前就已经全部创建，
+    # 也就是全部登记给了 event loop。
     tasks = [
         asyncio.create_task(search(source, query, log), name=f"search:{source.name}")
         for source in sources
@@ -56,6 +60,8 @@ async def collect(
 
     results: list[SearchResult] = []
     for task in tasks:
+        # await 第一个 Task 时，另外两个已经登记的 Task 也能在同一个 event loop 上推进。
+        # 结果仍按 tasks 列表顺序收集，但「完成顺序」由各自的等待时长决定。
         results.extend(await task)
     return results, log
 
@@ -161,7 +167,6 @@ assert last_start < first_completion
 
 ## 当前代码留下的问题
 
-正常路径会逐一等待所有 Tasks，但如果中途发生异常，手工维护的列表需要自己保证其余任务
-被取消和等待。Task 不是“发射后不用管”的后台工作。下一页用结构化并发表达所有权。
-
-[下一步：结构化并发与 TaskGroup →](04-structured-concurrency.md)
+正常路径会逐一等待所有 Tasks，但如果中途发生异常，手工维护的列表就得自己保证剩下的任务
+被取消、被等待——这很容易漏掉。Task 不是那种「发射出去就不用管」的后台工作。下一页我们
+用结构化并发把这份「所有权」写进代码结构里。
