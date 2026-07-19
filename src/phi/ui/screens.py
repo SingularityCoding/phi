@@ -5,12 +5,13 @@ import json
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
     Footer,
     Input,
+    ProgressBar,
     Static,
     TabbedContent,
     TabPane,
@@ -253,6 +254,213 @@ class ContextContentsTree(Tree[ContextContentItem]):
         return self.query_ancestor(ContextInspectorScreen)
 
 
+class ContextOverview(VerticalScroll):
+    """Scannable visual summary of one immutable Context inspection."""
+
+    def __init__(self, inspection: ContextInspection) -> None:
+        super().__init__(id="context-overview-scroll")
+        self.inspection = inspection
+
+    def compose(self) -> ComposeResult:
+        inspection = self.inspection
+        projection = inspection.projection
+        estimate = inspection.estimate
+        effective_limit = inspection.effective_input_limit
+        utilization = inspection.utilization_percent
+
+        yield Static(
+            "Snapshot of the selected Conversation View. Unsent drafts, queued messages, and "
+            "future input are not included.",
+            id="context-overview-intro",
+            markup=False,
+        )
+
+        with Grid(id="context-overview-metrics"):
+            with Vertical(classes="context-overview-metric"):
+                yield Static("MODEL", classes="context-overview-label", markup=False)
+                yield Static(
+                    inspection.model_id or "unresolved",
+                    id="context-model-value",
+                    classes="context-overview-value",
+                    markup=False,
+                )
+            with Vertical(classes="context-overview-metric"):
+                yield Static("TOKEN ESTIMATE", classes="context-overview-label", markup=False)
+                yield Static(
+                    f"~{estimate.tokens}",
+                    id="context-estimate-value",
+                    classes="context-overview-value",
+                    markup=False,
+                )
+            with Vertical(classes="context-overview-metric"):
+                yield Static("INPUT LIMIT", classes="context-overview-label", markup=False)
+                yield Static(
+                    str(effective_limit) if effective_limit is not None else "unknown",
+                    id="context-limit-value",
+                    classes="context-overview-value",
+                    markup=False,
+                )
+            with Vertical(classes="context-overview-metric"):
+                yield Static("UTILIZATION", classes="context-overview-label", markup=False)
+                yield Static(
+                    f"{utilization:.1f}%" if utilization is not None else "unavailable",
+                    id="context-utilization-value",
+                    classes="context-overview-value",
+                    markup=False,
+                )
+
+        yield Static("Request projection", classes="context-overview-section-title", markup=False)
+        with Horizontal(id="context-projection-flow"):
+            with Vertical(
+                id="context-projection-session",
+                classes="context-projection-stage",
+            ):
+                yield Static("SESSION PATH", classes="context-overview-label", markup=False)
+                yield Static(
+                    f"{projection.session_path_entries} Entries",
+                    id="context-projection-session-value",
+                    classes="context-projection-value",
+                    markup=False,
+                )
+                yield Static(
+                    "selected durable branch",
+                    classes="context-projection-note",
+                    markup=False,
+                )
+            yield from self._projection_arrow()
+            with Vertical(id="context-projection-view", classes="context-projection-stage"):
+                yield Static("CONVERSATION VIEW", classes="context-overview-label", markup=False)
+                yield Static(
+                    f"{projection.conversation_view_entries} Entries",
+                    id="context-projection-view-value",
+                    classes="context-projection-value",
+                    markup=False,
+                )
+                yield Static(
+                    "materialized history",
+                    classes="context-projection-note",
+                    markup=False,
+                )
+            yield from self._projection_arrow()
+            with Vertical(id="context-projection-context", classes="context-projection-stage"):
+                yield Static("FINITE CONTEXT", classes="context-overview-label", markup=False)
+                yield Static(
+                    f"{projection.context_messages} messages",
+                    id="context-projection-context-value",
+                    classes="context-projection-value",
+                    markup=False,
+                )
+                yield Static("budgeted selection", classes="context-projection-note", markup=False)
+            yield from self._projection_arrow()
+            with Vertical(id="context-projection-request", classes="context-projection-stage"):
+                yield Static("MODEL REQUEST", classes="context-overview-label", markup=False)
+                yield Static(
+                    f"{projection.request_messages} messages",
+                    id="context-projection-request-value",
+                    classes="context-projection-value",
+                    markup=False,
+                )
+                yield Static("normalized payload", classes="context-projection-note", markup=False)
+
+        yield Static("What contributes to this request", classes="context-overview-section-title")
+        with Grid(id="context-overview-details"):
+            with Vertical(classes="context-overview-panel", id="context-sources-panel"):
+                yield Static("Model input", classes="context-overview-panel-title", markup=False)
+                yield Static(
+                    self._source_details(),
+                    id="context-source-details",
+                    classes="context-overview-details",
+                    markup=False,
+                )
+            with Vertical(classes="context-overview-panel", id="context-capacity-panel"):
+                yield Static("Capacity & provenance", classes="context-overview-panel-title")
+                yield Static(
+                    self._capacity_details(),
+                    id="context-capacity-details",
+                    classes="context-overview-details",
+                    markup=False,
+                )
+                if effective_limit is None:
+                    yield Static(
+                        "Capacity percentage unavailable until the Model input limit is known.",
+                        id="context-capacity-unknown",
+                        classes="context-capacity-note",
+                        markup=False,
+                    )
+                else:
+                    yield Static(
+                        "Estimated use of effective input limit",
+                        classes="context-capacity-note",
+                        markup=False,
+                    )
+                    bar = ProgressBar(
+                        total=effective_limit,
+                        show_eta=False,
+                        id="context-capacity-bar",
+                    )
+                    bar.update(progress=estimate.tokens)
+                    yield bar
+
+        diagnostic_class = "has-diagnostics" if inspection.diagnostics else "is-clear"
+        with Vertical(
+            id="context-diagnostics-panel",
+            classes=f"context-overview-panel {diagnostic_class}",
+        ):
+            yield Static("Diagnostics", classes="context-overview-panel-title", markup=False)
+            yield Static(
+                "\n".join(f"• {item}" for item in inspection.diagnostics)
+                if inspection.diagnostics
+                else "No Context diagnostics for this snapshot.",
+                id="context-diagnostics-details",
+                classes="context-overview-details",
+                markup=False,
+            )
+
+    @staticmethod
+    def _projection_arrow() -> tuple[Static, Static]:
+        return (
+            Static("→", classes="context-projection-arrow context-projection-arrow-wide"),
+            Static("↓", classes="context-projection-arrow context-projection-arrow-narrow"),
+        )
+
+    def _source_details(self) -> str:
+        inspection = self.inspection
+        summary = (
+            f"included · {inspection.dropped_summary.characters} characters"
+            if inspection.dropped_summary is not None
+            else "not present"
+        )
+        return (
+            f"Stable instructions: {len(inspection.instructions)} origins · "
+            f"{inspection.character_counts['system_prompt']} characters\n"
+            f"Tools: {len(inspection.tools)} definitions · "
+            f"{inspection.character_counts['tools']} characters\n"
+            f"Selected messages: {len(inspection.messages)} · "
+            f"{inspection.character_counts['messages']} characters\n"
+            f"Dropped-history summary: {summary}"
+        )
+
+    def _capacity_details(self) -> str:
+        inspection = self.inspection
+        estimate = inspection.estimate
+        anchor = (
+            f"{inspection.provider_anchor_prompt_tokens} tokens"
+            if inspection.provider_anchor_prompt_tokens is not None
+            else "unavailable or not applicable"
+        )
+        safe = (
+            f"{inspection.safe_prompt_limit} tokens"
+            if inspection.safe_prompt_limit is not None
+            else "unknown"
+        )
+        return (
+            f"Local estimate: ~{estimate.local_tokens} tokens\n"
+            f"Provider anchor contributed: {'yes' if estimate.used_provider_anchor else 'no'}\n"
+            f"Latest prompt Usage anchor: {anchor}\n"
+            f"Safe prompt limit: {safe}"
+        )
+
+
 class ContextInspectorScreen(Screen[None]):
     """Full-screen read-only explorer for one immutable Model-request snapshot."""
 
@@ -269,7 +477,99 @@ class ContextInspectorScreen(Screen[None]):
     }
     #context-views { height: 1fr; }
     #context-overview-scroll, #context-raw-scroll { padding: 1 2; }
-    #context-overview-content, #context-raw-request, #context-content-detail {
+    #context-overview-intro {
+        height: auto;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+    #context-overview-metrics {
+        height: 5;
+        grid-size: 4 1;
+        grid-columns: 1fr 1fr 1fr 1fr;
+        grid-rows: 5;
+        grid-gutter: 1;
+        margin-bottom: 1;
+    }
+    .context-overview-metric {
+        height: 5;
+        padding: 0 1;
+        border: round $accent;
+        background: $panel;
+        content-align: left middle;
+    }
+    .context-overview-label {
+        height: 1;
+        color: $text-muted;
+        text-style: bold;
+    }
+    .context-overview-value, .context-projection-value {
+        height: 1;
+        text-style: bold;
+        color: $accent;
+    }
+    .context-overview-section-title {
+        height: 2;
+        padding-top: 1;
+        text-style: bold;
+    }
+    #context-projection-flow {
+        height: 5;
+        layout: horizontal;
+    }
+    .context-projection-stage {
+        width: 1fr;
+        height: 5;
+        padding: 0 1;
+        border: round $secondary;
+        background: $panel;
+        content-align: left middle;
+    }
+    .context-projection-note {
+        height: 1;
+        color: $text-muted;
+    }
+    .context-projection-arrow {
+        width: 3;
+        height: 5;
+        content-align: center middle;
+        color: $accent;
+        text-style: bold;
+    }
+    .context-projection-arrow-narrow { display: none; }
+    #context-overview-details {
+        height: auto;
+        grid-size: 2 1;
+        grid-columns: 1fr 1fr;
+        grid-rows: auto;
+        grid-gutter: 1;
+    }
+    .context-overview-panel {
+        height: auto;
+        min-height: 8;
+        padding: 0 1 1 1;
+        border: round $secondary;
+        background: $panel;
+    }
+    .context-overview-panel-title {
+        height: 2;
+        padding-top: 1;
+        text-style: bold;
+    }
+    .context-overview-details, .context-capacity-note {
+        height: auto;
+    }
+    .context-capacity-note {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #context-capacity-bar { margin-top: 1; }
+    #context-diagnostics-panel {
+        margin-top: 1;
+        min-height: 5;
+    }
+    #context-diagnostics-panel.is-clear { border: round $success; }
+    #context-diagnostics-panel.has-diagnostics { border: round $warning; }
+    #context-raw-request, #context-content-detail {
         height: auto;
         text-wrap: wrap;
     }
@@ -295,6 +595,31 @@ class ContextInspectorScreen(Screen[None]):
         width: 100%;
         height: 1fr;
     }
+    ContextInspectorScreen.narrow #context-overview-metrics {
+        height: 11;
+        grid-size: 2 2;
+        grid-columns: 1fr 1fr;
+        grid-rows: 5 5;
+    }
+    ContextInspectorScreen.narrow #context-projection-flow {
+        height: auto;
+        layout: vertical;
+    }
+    ContextInspectorScreen.narrow .context-projection-stage {
+        width: 100%;
+        height: 4;
+    }
+    ContextInspectorScreen.narrow .context-projection-arrow-wide { display: none; }
+    ContextInspectorScreen.narrow .context-projection-arrow-narrow {
+        display: block;
+        width: 100%;
+        height: 1;
+    }
+    ContextInspectorScreen.narrow #context-overview-details {
+        grid-size: 1 2;
+        grid-columns: 1fr;
+        grid-rows: auto auto;
+    }
     """
 
     BINDINGS = [
@@ -313,12 +638,7 @@ class ContextInspectorScreen(Screen[None]):
         yield Static("Context request explorer", id="context-explorer-title", markup=False)
         with TabbedContent(initial="context-overview", id="context-views"):
             with TabPane("Overview", id="context-overview"):
-                with VerticalScroll(id="context-overview-scroll"):
-                    yield Static(
-                        self._overview_text(),
-                        id="context-overview-content",
-                        markup=False,
-                    )
+                yield ContextOverview(self.inspection)
             with TabPane("Contents", id="context-contents"):
                 with Horizontal(id="context-contents-layout"):
                     yield self._contents_tree()
@@ -407,73 +727,6 @@ class ContextInspectorScreen(Screen[None]):
             self.query_one("#context-content-detail", Static).update(
                 self._content_detail(event.node.data)
             )
-
-    def _overview_text(self) -> str:
-        inspection = self.inspection
-        projection = inspection.projection
-        estimate = inspection.estimate
-        anchor = (
-            f"{inspection.provider_anchor_prompt_tokens} tokens (used to inform this estimate)"
-            if inspection.provider_anchor_prompt_tokens is not None
-            else "unavailable or not applicable"
-        )
-        effective = (
-            f"{inspection.effective_input_limit} tokens"
-            if inspection.effective_input_limit is not None
-            else "unknown"
-        )
-        safe = (
-            f"{inspection.safe_prompt_limit} tokens"
-            if inspection.safe_prompt_limit is not None
-            else "unknown"
-        )
-        utilization = (
-            f"{inspection.utilization_percent:.1f}% (estimated)"
-            if inspection.utilization_percent is not None
-            else "unavailable because the effective input limit is unknown"
-        )
-        summary = (
-            f"included, {inspection.dropped_summary.characters} characters"
-            if inspection.dropped_summary is not None
-            else "not present"
-        )
-        diagnostics = (
-            "\n".join(f"- {item}" for item in inspection.diagnostics)
-            if inspection.diagnostics
-            else "- none"
-        )
-        return (
-            "Inspection snapshot\n"
-            "The selected Conversation View was projected at inspection time. Unsent drafts, "
-            "queued messages, and future input are not Session Entries and are not included.\n\n"
-            f"Model: {inspection.model_id or 'unresolved'}\n\n"
-            "Projection\n"
-            f"Session path: {projection.session_path_entries} Entries\n"
-            "  ↓ materialize the selected durable branch\n"
-            f"Conversation View: {projection.conversation_view_entries} Entries\n"
-            "  ↓ select finite history; Compaction represents older Entries without deleting them\n"
-            f"Context: {projection.context_messages} selected messages\n"
-            "  ↓ inject stable instructions and any generated dropped-history summary\n"
-            f"Model request: {projection.request_messages} messages\n\n"
-            "Major Model-input sources\n"
-            f"Stable instructions: {len(inspection.instructions)} origin groups, "
-            f"{inspection.character_counts['system_prompt']} characters\n"
-            f"Tools: {len(inspection.tools)} registered definitions, "
-            f"{inspection.character_counts['tools']} characters\n"
-            f"Selected messages: {len(inspection.messages)}, "
-            f"{inspection.character_counts['messages']} characters\n"
-            f"Generated dropped-history summary: {summary}\n\n"
-            "Capacity and estimate provenance\n"
-            f"Final Token Estimate: ~{estimate.tokens} tokens\n"
-            f"Local Token Estimate: ~{estimate.local_tokens} tokens\n"
-            f"Provider anchor contributed: {'yes' if estimate.used_provider_anchor else 'no'}\n"
-            f"Latest applicable prompt Usage anchor: {anchor}\n"
-            f"Effective input limit: {effective}\n"
-            f"Safe prompt limit: {safe}\n"
-            f"Utilization: {utilization}\n\n"
-            "Diagnostics\n"
-            f"{diagnostics}"
-        )
 
     def _raw_request_text(self) -> str:
         request = self.inspection.request

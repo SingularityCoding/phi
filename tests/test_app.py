@@ -12,6 +12,7 @@ from textual.widgets import (
     Collapsible,
     LoadingIndicator,
     Markdown,
+    ProgressBar,
     Static,
     TabbedContent,
     TextArea,
@@ -285,11 +286,18 @@ async def test_context_status_and_explorer_are_honest_when_capacity_is_unknown(
         prompt.load_text("/context")
         await pilot.press("enter")
         await pilot.pause()
-        overview = str(app.screen.query_one("#context-overview-content").render())
-        assert "Effective input limit: unknown" in overview
-        assert "Safe prompt limit: unknown" in overview
-        assert "Utilization: unavailable" in overview
-        assert "%" not in overview
+        assert str(app.screen.query_one("#context-model-value", Static).render()) == "model-a"
+        assert str(app.screen.query_one("#context-limit-value", Static).render()) == "unknown"
+        assert "Safe prompt limit: unknown" in str(
+            app.screen.query_one("#context-capacity-details", Static).render()
+        )
+        assert "unavailable" in str(
+            app.screen.query_one("#context-utilization-value", Static).render()
+        )
+        assert not app.screen.query(ProgressBar)
+        session_stage = app.screen.query_one("#context-projection-session")
+        view_stage = app.screen.query_one("#context-projection-view")
+        assert session_stage.region.y < view_stage.region.y
 
         await pilot.press("2")
         await pilot.pause()
@@ -411,17 +419,35 @@ async def test_context_command_opens_educational_request_explorer_without_mutati
         await pilot.pause()
         views = app.screen.query_one("#context-views", TabbedContent)
         assert views.active == "context-overview"
-        overview = str(app.screen.query_one("#context-overview-content").render())
-        assert "Model: model-a" in overview
-        assert "Session path: 4 Entries" in overview
-        assert "Conversation View: 4 Entries" in overview
-        assert "Context: 4 selected messages" in overview
-        assert "Model request: 5 messages" in overview
-        assert "Final Token Estimate: ~" in overview
-        assert "Latest applicable prompt Usage anchor: 10 tokens" in overview
-        assert "Effective input limit: 100000 tokens" in overview
-        assert "Safe prompt limit: 83616 tokens" in overview
-        assert "Aggregate provider Usage" not in overview
+        assert str(app.screen.query_one("#context-model-value", Static).render()) == "model-a"
+        assert str(app.screen.query_one("#context-estimate-value", Static).render()).startswith("~")
+        assert str(app.screen.query_one("#context-limit-value", Static).render()) == "100000"
+        assert "%" in str(app.screen.query_one("#context-utilization-value", Static).render())
+        assert str(app.screen.query_one("#context-projection-session-value", Static).render()) == (
+            "4 Entries"
+        )
+        assert str(app.screen.query_one("#context-projection-view-value", Static).render()) == (
+            "4 Entries"
+        )
+        assert str(app.screen.query_one("#context-projection-context-value", Static).render()) == (
+            "4 messages"
+        )
+        assert str(app.screen.query_one("#context-projection-request-value", Static).render()) == (
+            "5 messages"
+        )
+        session_stage = app.screen.query_one("#context-projection-session")
+        view_stage = app.screen.query_one("#context-projection-view")
+        assert session_stage.region.y == view_stage.region.y
+        assert session_stage.region.x < view_stage.region.x
+        sources = str(app.screen.query_one("#context-source-details", Static).render())
+        assert "Stable instructions" in sources
+        assert "Tools" in sources
+        assert "Selected messages" in sources
+        capacity = str(app.screen.query_one("#context-capacity-details", Static).render())
+        assert "Latest prompt Usage anchor: 10 tokens" in capacity
+        assert "Safe prompt limit: 83616 tokens" in capacity
+        assert "Aggregate provider Usage" not in capacity
+        assert app.screen.query_one("#context-capacity-bar", ProgressBar).total == 100_000
 
         await pilot.press("3")
         await pilot.pause()
@@ -882,8 +908,8 @@ async def test_manual_compaction_routes_focus_and_renders_structural_marker(
         prompt.load_text("/context")
         await pilot.press("enter")
         await pilot.pause()
-        overview = str(app.screen.query_one("#context-overview-content").render())
-        assert "Generated dropped-history summary: included" in overview
+        sources = str(app.screen.query_one("#context-source-details", Static).render())
+        assert "Dropped-history summary: included" in sources
         await pilot.press("2")
         await pilot.pause()
         await pilot.press(
