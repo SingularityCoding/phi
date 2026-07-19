@@ -88,6 +88,15 @@ class ConversationView:
 
 
 @dataclass(frozen=True)
+class SessionPresentation:
+    """Read-only complete selected path for Host presentation and navigation."""
+
+    session_id: str
+    leaf_id: str | None
+    entries: tuple[Entry, ...]
+
+
+@dataclass(frozen=True)
 class RunInvocation:
     """Dependencies bound to one exact Harness Run for lifecycle extensions."""
 
@@ -439,6 +448,23 @@ async def materialize_conversation(
         model=handle.metadata.model,
         dropped_summary=dropped_summary,
     )
+
+
+async def materialize_presentation(
+    storage: SessionStorage,
+    handle: SessionHandle,
+) -> SessionPresentation:
+    """Materialize the complete durable selected path without Context filtering."""
+
+    state = await storage.load_state(handle.session_id)
+    path = await _materialize_path(
+        storage,
+        state,
+        handle.leaf_id,
+        seen_sessions=set(),
+    )
+    _validate_path(path, handle.session_id)
+    return SessionPresentation(handle.session_id, handle.leaf_id, path)
 
 
 async def inspect_context(

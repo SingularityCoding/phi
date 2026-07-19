@@ -6,9 +6,14 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from phi.bootstrap import CwdRuntimeBootstrap, build_headless_runtime, build_runtime_resources
+from phi.bootstrap import (
+    CwdRuntimeBootstrap,
+    build_headless_runtime,
+    build_interactive_runtime,
+    build_runtime_resources,
+)
 from phi.mcp import McpConfigDiagnostic
-from phi.model import ModelConfig, ModelInfo, ModelResponse, ScriptedModel
+from phi.model import ModelConfig, ModelInfo, ModelResponse, ScriptedModel, ToolCall
 from phi.sessions import (
     SessionStorage,
     create_session,
@@ -18,7 +23,14 @@ from phi.sessions import (
 )
 from phi.settings import Settings
 from phi.skills import SkillNotFoundError
-from phi.tools import DEFAULT_MODE, ApprovalClass, RuleBasedApprovalPolicy
+from phi.tools import (
+    DEFAULT_MODE,
+    ApprovalClass,
+    ApprovalDecision,
+    AskResolution,
+    RuleBasedApprovalPolicy,
+    Tool,
+)
 
 
 def _write_skill(
@@ -652,4 +664,60 @@ async def test_host_runtime_closes_its_client_when_model_catalog_loading_fails(
     with pytest.raises(RuntimeError, match="catalog failed"):
         await build_headless_runtime(tmp_path)
 
+    assert client.close_count == 1
+
+
+async def test_interactive_runtime_reuses_user_resolving_policy_and_closes_once(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    settings = Settings(
+        api_key=SecretStr("test-key"),
+        default_model="model-a",
+        session_dir=tmp_path / "sessions",
+    )
+
+    class ObservableClient:
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        async def aclose(self) -> None:
+            self.close_count += 1
+
+    client = ObservableClient()
+
+    async def static_catalog(
+        config: ModelConfig,
+        *,
+        client: object,
+    ) -> list[ModelInfo]:
+        del config, client
+        return [ModelInfo("model-a", max_input_tokens=8_000)]
+
+    decisions: list[str] = []
+
+    async def allow_once(call: ToolCall, tool: Tool) -> AskResolution:
+        decisions.append(f"{tool.name}:{call.id}")
+        return AskResolution.ALLOW_ONCE
+
+    monkeypatch.setattr("phi.bootstrap.Settings", lambda: settings)
+    monkeypatch.setattr("phi.bootstrap.httpx.AsyncClient", lambda: client)
+    monkeypatch.setattr("phi.bootstrap.list_available_models", static_catalog)
+
+    runtime = await build_interactive_runtime(cwd, approval_resolver=allow_once)
+    assert runtime.approval_policy is not None
+    assert runtime.approval_policy.approval_mode_name == "default"
+    write_tool = runtime.resources.tools.get("write")
+    assert write_tool is not None
+    decision = await runtime.approval_policy.decide(
+        ToolCall("write-1", "write", {"path": "output.txt", "content": "ok"}),
+        write_tool,
+    )
+    assert decision is ApprovalDecision.ALLOW
+    assert decisions == ["write:write-1"]
+
+    await runtime.close()
+    await runtime.close()
     assert client.close_count == 1

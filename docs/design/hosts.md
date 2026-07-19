@@ -1,7 +1,6 @@
 # CLI and TUI Hosts Design
 
-> **Status:** Design complete; the CLI command surface and minimal Textual shell are implemented.
-> The complete TUI is pending.
+> **Status:** Implemented.
 
 ## Host boundary
 
@@ -12,8 +11,8 @@ not implement Context construction, Session persistence, Tool dispatch, or the R
 Cwd-scoped bootstrap resources are built once. The current immutable `SessionHandle` is owned by the
 Host and replaced after new/resume/fork/send operations.
 
-Headless mode should land before the full TUI because it is the smallest consumer that can prove
-shared services do not depend on Textual.
+The headless Host landed first as the smallest consumer proving shared services do not depend on
+Textual; the complete TUI now composes those same services interactively.
 
 ## CLI command surface
 

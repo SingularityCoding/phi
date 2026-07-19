@@ -95,6 +95,17 @@ class McpRuntime:
         return tuple(self._connections)
 
     @property
+    def server_tool_counts(self) -> tuple[tuple[str, int], ...]:
+        """Return deterministic connected-server Tool counts for Host inspection."""
+
+        return tuple(
+            sorted(
+                (connection.server_id, len(connection.tools))
+                for connection in self._connections.values()
+            )
+        )
+
+    @property
     def resources(self) -> tuple[McpResource, ...]:
         discovered = (
             McpResource(

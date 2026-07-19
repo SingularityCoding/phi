@@ -15,7 +15,8 @@ Implemented today:
 - Python 3.12 `src` layout managed by `uv`;
 - environment-backed settings for the LiteLLM Proxy;
 - Typer entry point with bare invocation;
-- minimal Textual application shell;
+- complete Textual Host with durable transcript rendering, streaming, Queue/Steer interaction,
+  interactive approval, slash commands, and Context inspection;
 - stateless OpenAI-compatible Model gateway with HTTP and SSE normalization;
 - standalone response assembly, typed Model failures, and model discovery;
 - deterministic Scripted Model plus offline protocol tests and opt-in live contracts;
@@ -45,9 +46,9 @@ Implemented today:
   inspection, atomic project/global MCP configuration management, and bounded Model settings/Proxy
   diagnostics;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
-- smoke tests for CLI and TUI startup.
+- offline behavioral tests for CLI and complete TUI workflows.
 
-The next Hosts boundary is the complete Textual TUI.
+The Hosts boundary is complete; the next stage is cross-capability hardening and evaluation.
 
 ## v1 capability scope
 
@@ -63,8 +64,8 @@ The next Hosts boundary is the complete Textual TUI.
 | Project instructions and Agent Skills | Complete | Implemented |
 | stdio MCP tools, resources, prompts, configuration | Complete | Implemented |
 | Delegation-style multi-agent tools | Complete | Implemented |
-| Headless CLI and complete Textual TUI | Complete | Partial: complete headless CLI implemented; complete TUI pending |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, stdio MCP, Delegation, and complete headless CLI coverage implemented |
+| Headless CLI and complete Textual TUI | Complete | Implemented |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, stdio MCP, Delegation, and both Host workflows covered offline; broader behavioral evaluations remain |
 
 ## Implementation sequence
 

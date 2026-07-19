@@ -48,8 +48,10 @@ from phi.skills import (
     render_model_skill_menu,
 )
 from phi.tools import (
+    DEFAULT_MODE,
     HEADLESS_MODE,
     ApprovalPolicy,
+    ApprovalResolver,
     RuleBasedApprovalPolicy,
     Tool,
     ToolDispatcher,
@@ -132,6 +134,7 @@ class HostRuntime:
     available_models: tuple[ModelInfo, ...]
     storage: SessionStorage
     resources: RuntimeResources
+    approval_policy: RuleBasedApprovalPolicy | None = None
     close_callback: Callable[[], Awaitable[object]] | None = None
     _closed: bool = False
 
@@ -199,6 +202,41 @@ async def build_headless_runtime(cwd: Path) -> HostRuntime:
         available_models=available_models,
         storage=SessionStorage(settings.session_dir),
         resources=resources,
+        close_callback=client.aclose,
+    )
+
+
+async def build_interactive_runtime(
+    cwd: Path,
+    *,
+    approval_resolver: ApprovalResolver,
+) -> HostRuntime:
+    """Build one production runtime with an interactive, user-resolving policy."""
+
+    settings = Settings()
+    config = model_config_from_settings(settings)
+    client = httpx.AsyncClient()
+    resources: RuntimeResources | None = None
+    policy = RuleBasedApprovalPolicy(DEFAULT_MODE, approval_resolver)
+    try:
+        available_models = tuple(await list_available_models(config, client=client))
+        resources = await build_runtime_resources(
+            cwd,
+            base_instructions=PHI_BASE_INSTRUCTIONS,
+            approval_policy=policy,
+        )
+    except BaseException:
+        if resources is not None:
+            await resources.close()
+        await client.aclose()
+        raise
+    return HostRuntime(
+        settings=settings,
+        model=OpenAICompatibleModel(config, client=client),
+        available_models=available_models,
+        storage=SessionStorage(settings.session_dir),
+        resources=resources,
+        approval_policy=policy,
         close_callback=client.aclose,
     )
 

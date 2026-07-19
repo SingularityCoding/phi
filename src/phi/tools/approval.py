@@ -106,6 +106,11 @@ class RuleBasedApprovalPolicy:
     def approval_mode_name(self) -> str:
         return self.mode.name
 
+    def set_resolver(self, resolver: ApprovalResolver) -> None:
+        """Bind the current interactive Host's modal resolution boundary."""
+
+        self._resolver = resolver
+
     async def decide(self, call: ToolCall, tool: Tool) -> ApprovalDecision:
         matching = tuple(
             rule

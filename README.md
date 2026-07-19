@@ -74,15 +74,27 @@ Tool Registry. Delegation is bounded to depth three and four concurrently runnin
 cwd-scoped runtime. Unfinished descendants are cancelled and awaited before an owning Run or
 runtime lifetime ends.
 
-The headless Host is also available. `phi run` starts one bounded Run in a durable Session, loads
-the cwd-scoped runtime, and supports Session resume, explicit Model selection, a Step budget, and
-live redacted JSONL Events. Session discovery/resume/Fork commands, complete Context inspection,
-project/global MCP configuration management, and bounded Proxy diagnostics are available from the
-same Typer application. The complete Textual interaction workflow remains pending.
+Both Hosts are available. Bare `phi` opens the complete Textual workflow over one cwd-scoped
+runtime and durable Session, with streaming transcript updates, Queue/Steer follow-ups, interactive
+approval, Session-tree navigation, Model and permission selection, manual Compaction, dynamic Skill
+and MCP Prompt commands, and exact Context inspection. `phi run` provides the same bounded Run and
+Session services headlessly with live redacted JSONL Events. Session discovery/resume/Fork commands,
+Context inspection, project/global MCP configuration management, and bounded Proxy diagnostics are
+available from the same Typer application.
 
 ## Run one task
 
-Configure `PHI_API_KEY` and `PHI_DEFAULT_MODEL` in `.env`, then run a quoted task:
+Configure `PHI_API_KEY` and `PHI_DEFAULT_MODEL` in `.env`, then start the interactive Host:
+
+```bash
+uv run phi
+```
+
+Enter submits; Shift+Enter inserts a newline; Escape cancels only the active Run. Type `/` to see
+the built-in commands and currently loaded Skill and MCP Prompt commands. Pending messages remain
+editable and removable until they are dispatched, and can be switched between Queue and Steer.
+
+For a headless Run, pass a quoted task:
 
 ```bash
 uv run phi run "inspect this repository and summarize its test strategy"
@@ -99,8 +111,7 @@ The command also accepts `--model <name>`, `--max-steps <positive-integer>`, and
 writes one redacted, versioned Run Event per stdout line and does not append a plain-text summary.
 Headless approval automatically allows read-only Tools and denies workspace-mutating or unconfined
 Tools as ordinary Tool Results. Completed, failed, Step-budget-exhausted, and cancelled Runs exit
-with status 0, 1, 2, and 130 respectively. Bare `uv run phi` still launches the minimal Textual
-shell.
+with status 0, 1, 2, and 130 respectively.
 
 The management and diagnostic commands are:
 
@@ -162,9 +173,9 @@ canonically resolves paths, confines them to an explicit workspace root, and den
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. The Typer commands expose the Model, Harness, Session, Context, MCP configuration,
-and cwd runtime services through the headless Host; the complete Textual interaction workflow is
-still pending.
+filesystem race. The Typer commands and complete Textual workflow expose the Model, Harness,
+Session, Context, MCP configuration, and cwd runtime services through thin Hosts over the same
+application operations.
 
 ## Design principles
 

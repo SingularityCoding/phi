@@ -94,7 +94,7 @@ class _JsonlEventWriter:
 def main(ctx: typer.Context) -> None:
     """Launch the interactive TUI."""
     if ctx.invoked_subcommand is None:
-        run_tui()
+        run_tui(cwd=Path.cwd().resolve())
 
 
 def _run_async[T](operation: Coroutine[Any, Any, T]) -> T:
