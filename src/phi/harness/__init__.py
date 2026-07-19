@@ -22,7 +22,9 @@ from phi.harness.compaction import (
 from phi.harness.context import Context, ContextInspection, build_context
 from phi.harness.events import (
     ApprovalDecided,
+    Event,
     EventBus,
+    EventEmitter,
     EventListener,
     ModelCallCompleted,
     ModelCallDelta,
@@ -47,7 +49,9 @@ __all__ = [
     "ContextCapacityError",
     "ContextInspection",
     "ContextPolicyError",
+    "Event",
     "EventBus",
+    "EventEmitter",
     "EventListener",
     "Hooks",
     "ModelCallCompleted",

@@ -19,6 +19,16 @@ class ToolRegistry:
             raise ValueError(f"tool {registered_tool.name!r} is already registered")
         self._tools[registered_tool.name] = registered_tool
 
+    def register_many(self, registered_tools: list[Tool] | tuple[Tool, ...]) -> None:
+        """Register a batch atomically after validating every Tool name."""
+
+        additions: dict[str, Tool] = {}
+        for registered_tool in registered_tools:
+            if registered_tool.name in self._tools or registered_tool.name in additions:
+                raise ValueError(f"tool {registered_tool.name!r} is already registered")
+            additions[registered_tool.name] = registered_tool
+        self._tools.update(additions)
+
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 

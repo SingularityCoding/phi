@@ -4,7 +4,7 @@ import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from phi.harness.snapshots import (
     freeze_error,
@@ -21,14 +21,18 @@ if TYPE_CHECKING:
     from phi.harness.run import RunResult
 
 
+class Event:
+    """Marker base for immutable notifications delivered through an EventBus."""
+
+
 @dataclass(frozen=True)
-class RunStarted:
+class RunStarted(Event):
     run_id: str
     event_index: int
 
 
 @dataclass(frozen=True)
-class ModelCallStarted:
+class ModelCallStarted(Event):
     run_id: str
     event_index: int
     step_index: int
@@ -39,7 +43,7 @@ class ModelCallStarted:
 
 
 @dataclass(frozen=True)
-class ModelCallDelta:
+class ModelCallDelta(Event):
     run_id: str
     event_index: int
     step_index: int
@@ -50,7 +54,7 @@ class ModelCallDelta:
 
 
 @dataclass(frozen=True)
-class ModelCallCompleted:
+class ModelCallCompleted(Event):
     run_id: str
     event_index: int
     step_index: int
@@ -62,7 +66,7 @@ class ModelCallCompleted:
 
 
 @dataclass(frozen=True)
-class ToolCallStarted:
+class ToolCallStarted(Event):
     run_id: str
     event_index: int
     step_index: int
@@ -73,7 +77,7 @@ class ToolCallStarted:
 
 
 @dataclass(frozen=True)
-class ToolCallCompleted:
+class ToolCallCompleted(Event):
     run_id: str
     event_index: int
     step_index: int
@@ -87,7 +91,7 @@ class ToolCallCompleted:
 
 
 @dataclass(frozen=True)
-class ApprovalDecided:
+class ApprovalDecided(Event):
     run_id: str
     event_index: int
     step_index: int
@@ -100,7 +104,7 @@ class ApprovalDecided:
 
 
 @dataclass(frozen=True)
-class RunFinished:
+class RunFinished(Event):
     run_id: str
     event_index: int
     result: RunResult
@@ -140,19 +144,25 @@ type RunEvent = (
     | ApprovalDecided
     | RunFinished
 )
-type EventListener = Callable[[RunEvent], Awaitable[object] | object]
+type EventListener[TEvent: Event] = Callable[[TEvent], Awaitable[object] | object]
 
 
-class EventBus:
-    """Deliver immutable Run Events to listeners in subscription order."""
+class EventEmitter[TEvent: Event](Protocol):
+    """Structural Event-delivery boundary for producers of one Event family."""
 
-    def __init__(self, listeners: Iterable[EventListener] = ()) -> None:
+    async def emit(self, event: TEvent) -> None: ...
+
+
+class EventBus[TEvent: Event]:
+    """Deliver immutable Events to listeners in subscription order."""
+
+    def __init__(self, listeners: Iterable[EventListener[TEvent]] = ()) -> None:
         self._listeners = list(listeners)
 
-    def subscribe(self, listener: EventListener) -> None:
+    def subscribe(self, listener: EventListener[TEvent]) -> None:
         self._listeners.append(listener)
 
-    async def emit(self, event: RunEvent) -> None:
+    async def emit(self, event: TEvent) -> None:
         for listener in self._listeners:
             try:
                 result = listener(event)

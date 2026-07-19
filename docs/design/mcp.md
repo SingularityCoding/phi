@@ -1,6 +1,6 @@
 # MCP Integration Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Implemented for cwd-scoped stdio servers.
 
 ## Protocol boundary
 
@@ -57,11 +57,14 @@ Every discovered MCP Tool is directly registered in the common `ToolRegistry` as
 mcp__{server_id}__{tool_name}
 ```
 
-Double underscores preserve visible server/tool boundaries while remaining valid for
-OpenAI-compatible tool-name character restrictions.
+Double underscores preserve visible server/tool boundaries. Generated names must contain only
+letters, digits, underscores, or hyphens and must not exceed the OpenAI-compatible 64-character
+wire limit; one invalid generated name isolates that server before any of its Tools are registered.
 
 MCP tools use the remote `inputSchema` as `Tool.args_schema` and set `args_model=None`. Phi does not
 perform a second local JSON Schema validation pass; server rejection becomes `ToolResult.error`.
+Schemas are preserved rather than rewritten. A configured environment value appearing in a Tool
+schema or another structural MCP identity fails closed and isolates that server before registration.
 
 MCP Tools are `approval_class="unconfined"`. They execute through an external process or service,
 not through `ConfinedEnvironment`, so approval is the only Phi-controlled gate in v1.

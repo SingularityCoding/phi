@@ -51,8 +51,8 @@ capabilities:
   completion and failure semantics.
 - **Sessions and Context** — durable conversation trees, resume and fork workflows, budgeted
   Context construction, and compaction without deleting history.
-- **Runtime integrations** — cwd-scoped project instructions and on-demand Agent Skills, with
-  stdio MCP tools, resources, and prompts as the next implementation boundary.
+- **Runtime integrations** — cwd-scoped project instructions, on-demand Agent Skills, and managed
+  stdio MCP tools, resources, and user-selected prompts.
 - **Delegation** — isolated Subagent Sessions built from the same Run, Tool, Event, and Hook
   primitives as the parent Agent.
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
@@ -64,6 +64,32 @@ a `CLAUDE.md` fallback, discovers validated global and project Skills, assembles
 prefix, and registers a read-only `skill_tool` through the existing Tool Registry and Dispatcher.
 Model-disabled Skills remain available through a separate trusted user-invocation API without being
 advertised to the Model.
+
+Phi also loads stdio MCP servers from `~/.phi/mcp.json` and `.phi/mcp.json`. Project definitions
+replace global definitions with the same server ID, including `"enabled": false` definitions that
+disable a global server for one project:
+
+```json
+{
+  "mcpServers": {
+    "local": {
+      "command": "uvx",
+      "args": ["example-mcp-server"],
+      "env": {},
+      "enabled": true
+    }
+  }
+}
+```
+
+Enabled servers start in the canonical project cwd and are reused until an explicit rebuild or cwd
+change. Their Tools are registered as `mcp__{server_id}__{tool_name}` and remain unconfined, so the
+existing Approval Policy gates them. Concrete Resources are available through the read-only
+`mcp_list_resources` and `mcp_read_resource` meta-tools; these protocol reads do not claim
+workspace Confinement. Prompts stay outside the Model-visible Tool Registry and are returned only
+through trusted runtime operations such as `/mcp__{server_id}__{prompt_name}` selection. One broken
+server produces an Event and diagnostic without blocking healthy servers, and runtime shutdown
+owns all MCP client sessions and subprocesses.
 
 Phi persists versioned conversation trees with crash-aware commits, exact forks, branch navigation,
 and separate redacted Event Traces. Context construction is immutable and inspectable, uses
@@ -78,9 +104,9 @@ canonically resolves paths, confines them to an explicit workspace root, and den
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. The CLI and TUI remain a minimal shell while stdio MCP and later roadmap stages are
-built; the Model, Tool, Harness, Session, Context, and cwd runtime services are not yet wired into an
-interactive Host workflow.
+filesystem race. The CLI and TUI remain a minimal shell while Subagents and later roadmap stages
+are built; the Model, Tool, Harness, Session, Context, and cwd runtime services are not yet wired
+into an interactive Host workflow.
 
 ## Design principles
 

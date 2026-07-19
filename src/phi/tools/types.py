@@ -52,6 +52,8 @@ class Tool:
         object.__setattr__(self, "args_schema", _freeze_json(self.args_schema))
         if not re.fullmatch(r"[A-Za-z0-9_-]+", self.name):
             raise ValueError("tool name must contain only letters, digits, underscores, or hyphens")
+        if len(self.name) > 64:
+            raise ValueError("tool name must not exceed 64 characters")
         if not self.description.strip():
             raise ValueError("tool description must not be empty")
         if self.timeout_seconds is not None and (

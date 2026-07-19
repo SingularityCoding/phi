@@ -33,10 +33,11 @@ async def test_preloaded_skill_activation_uses_the_existing_run_events_and_trace
     global_root = tmp_path / "global"
     source = global_root / "explain.md"
     _write_skill(source)
-    resources = build_runtime_resources(
+    resources = await build_runtime_resources(
         cwd,
         base_instructions="Phi base.",
         global_skill_root=global_root,
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
     source.unlink()
@@ -103,10 +104,11 @@ async def test_skill_tool_errors_are_nondisclosing_and_recoverable_inside_a_run(
     disabled = cwd / ".phi" / "skills" / "disabled.md"
     _write_skill(enabled)
     _write_skill(disabled, disabled=True)
-    resources = build_runtime_resources(
+    resources = await build_runtime_resources(
         cwd,
         base_instructions="Phi base.",
         global_skill_root=tmp_path / "global",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
     model = ScriptedModel(

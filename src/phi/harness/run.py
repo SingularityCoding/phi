@@ -12,6 +12,7 @@ from uuid import uuid4
 from phi.harness.events import (
     ApprovalDecided,
     EventBus,
+    EventEmitter,
     ModelCallCompleted,
     ModelCallDelta,
     ModelCallStarted,
@@ -74,7 +75,7 @@ class RunResult:
 
 
 class _EventEmitter:
-    def __init__(self, bus: EventBus, run_id: str) -> None:
+    def __init__(self, bus: EventEmitter[RunEvent], run_id: str) -> None:
         self.bus = bus
         self.run_id = run_id
         self._next_index = 0
@@ -95,7 +96,7 @@ async def run(
     *,
     max_steps: int,
     hooks: Hooks | None = None,
-    event_bus: EventBus | None = None,
+    event_bus: EventEmitter[RunEvent] | None = None,
     run_id: str | None = None,
 ) -> RunResult:
     """Execute one bounded, streaming Model Run."""
@@ -104,7 +105,7 @@ async def run(
         raise ValueError("max_steps must be a positive integer")
 
     active_run_id = run_id if run_id is not None else str(uuid4())
-    emitter = _EventEmitter(event_bus or EventBus(), active_run_id)
+    emitter = _EventEmitter(event_bus or EventBus[RunEvent](), active_run_id)
     working_messages = deepcopy(initial_request.messages)
     working_tools = deepcopy(initial_request.tools)
     active_hooks = hooks or Hooks()

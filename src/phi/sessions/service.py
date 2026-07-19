@@ -13,6 +13,8 @@ from phi.harness import (
     ContextCapacityError,
     ContextInspection,
     EventBus,
+    EventEmitter,
+    EventListener,
     Hooks,
     InvalidCompactionSummaryError,
     ModelCallCompleted,
@@ -436,7 +438,7 @@ async def send_message(
     stable_instructions: str,
     max_steps: int,
     hooks: Hooks | None = None,
-    events: EventBus | None = None,
+    events: EventEmitter[RunEvent] | None = None,
 ) -> tuple[SessionHandle, RunResult]:
     if not text.strip():
         raise ValueError("User messages must not be empty")
@@ -487,7 +489,7 @@ async def _continue_send(
     stable_instructions: str,
     max_steps: int,
     hooks: Hooks | None,
-    run_events: EventBus,
+    run_events: EventEmitter[RunEvent],
 ) -> tuple[SessionHandle, RunResult]:
     handle = active.handle
     inspection = await inspect_context(
@@ -693,14 +695,14 @@ def _with_runtime(
 def _run_event_bus(
     storage: SessionStorage,
     handle: SessionHandle,
-    external: EventBus | None,
-) -> tuple[EventBus, _SafeStepRecorder, TraceWriter]:
+    external: EventEmitter[RunEvent] | None,
+) -> tuple[EventBus[RunEvent], _SafeStepRecorder, TraceWriter]:
     recorder = _SafeStepRecorder()
     trace_writer = TraceWriter(storage.trace_path(handle.session_id))
-    listeners = [recorder, trace_writer]
+    listeners: list[EventListener[RunEvent]] = [recorder, trace_writer]
     if external is not None:
         listeners.append(external.emit)
-    return EventBus(listeners), recorder, trace_writer
+    return EventBus[RunEvent](listeners), recorder, trace_writer
 
 
 async def _cancelled_result(

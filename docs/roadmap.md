@@ -32,10 +32,13 @@ Implemented today:
 - cwd-scoped root Project Instructions, validated global/project Agent Skill discovery, deterministic
   stable-instruction assembly, trusted user activation, and read-only Model activation through the
   common Tool Registry and Dispatcher;
+- merged global/project stdio MCP configuration, managed client/subprocess lifetimes, isolated
+  capability discovery, unconfined Tool dispatch, read-only Resource meta-tools, trusted Prompt
+  operations, and connection Events/diagnostics;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next implementation boundary is the remaining runtime integration: stdio MCP.
+The next implementation boundary is delegation-style Subagents.
 
 ## v1 capability scope
 
@@ -49,10 +52,10 @@ The next implementation boundary is the remaining runtime integration: stdio MCP
 | Session entries, JSONL storage, resume, fork | Complete | Implemented |
 | Context construction and compaction | Complete | Implemented |
 | Project instructions and Agent Skills | Complete | Implemented |
-| stdio MCP tools, resources, prompts, configuration | Complete | Not started |
+| stdio MCP tools, resources, prompts, configuration | Complete | Implemented |
 | Delegation-style multi-agent tools | Complete | Not started |
 | Headless CLI and complete Textual TUI | Complete | Minimal shell only |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, and Skills coverage implemented |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, and stdio MCP coverage implemented |
 
 ## Implementation sequence
 

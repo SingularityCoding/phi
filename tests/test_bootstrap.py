@@ -1,8 +1,12 @@
+import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from phi.bootstrap import CwdRuntimeBootstrap, build_runtime_resources
+from phi.mcp import McpConfigDiagnostic
 from phi.model import ModelResponse, ScriptedModel
 from phi.sessions import (
     SessionStorage,
@@ -32,7 +36,27 @@ def _write_skill(
     )
 
 
-def test_cwd_assembly_orders_stable_sections_and_exposes_only_model_skills(
+def _write_mcp_config(cwd: Path, pid_path: Path) -> None:
+    source = cwd / ".phi" / "mcp.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    fixture = Path(__file__).parent / "mcp" / "stdio_fixture.py"
+    source.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "fixture": {
+                        "command": sys.executable,
+                        "args": [str(fixture)],
+                        "env": {"PHI_MCP_PID_FILE": str(pid_path)},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_cwd_assembly_orders_stable_sections_and_exposes_only_model_skills(
     tmp_path: Path,
 ) -> None:
     cwd = tmp_path / "workspace"
@@ -60,11 +84,12 @@ def test_cwd_assembly_orders_stable_sections_and_exposes_only_model_skills(
         disabled=True,
     )
 
-    resources = build_runtime_resources(
+    resources = await build_runtime_resources(
         cwd,
         base_instructions="Phi base.\n",
         personal_instructions="Personal rules.\n",
         global_skill_root=global_root,
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         project_skill_root=project_root,
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
@@ -105,7 +130,9 @@ def test_cwd_assembly_orders_stable_sections_and_exposes_only_model_skills(
     }
 
 
-def test_trusted_user_invocation_can_select_a_model_disabled_skill(tmp_path: Path) -> None:
+async def test_trusted_user_invocation_can_select_a_model_disabled_skill(
+    tmp_path: Path,
+) -> None:
     cwd = tmp_path / "workspace"
     cwd.mkdir()
     project_root = cwd / ".phi" / "skills"
@@ -116,10 +143,11 @@ def test_trusted_user_invocation_can_select_a_model_disabled_skill(tmp_path: Pat
         body="Trusted body.\n",
         disabled=True,
     )
-    resources = build_runtime_resources(
+    resources = await build_runtime_resources(
         cwd,
         base_instructions="Phi base.",
         global_skill_root=tmp_path / "global",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
 
@@ -132,7 +160,7 @@ def test_trusted_user_invocation_can_select_a_model_disabled_skill(tmp_path: Pat
         resources.invoke_skill("missing")
 
 
-def test_runtime_resources_are_reused_until_cwd_changes_or_rebuild_is_requested(
+async def test_runtime_resources_are_reused_until_cwd_changes_or_rebuild_is_requested(
     tmp_path: Path,
 ) -> None:
     first_cwd = tmp_path / "first"
@@ -144,14 +172,15 @@ def test_runtime_resources_are_reused_until_cwd_changes_or_rebuild_is_requested(
     bootstrap = CwdRuntimeBootstrap(
         base_instructions="Phi base.",
         global_skill_root=tmp_path / "global",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
 
-    first = bootstrap.load(first_cwd)
+    first = await bootstrap.load(first_cwd)
     (first_cwd / "AGENTS.md").write_text("Rebuilt version.\n", encoding="utf-8")
-    reused = bootstrap.load(first_cwd)
-    rebuilt = bootstrap.load(first_cwd, rebuild=True)
-    changed = bootstrap.load(second_cwd)
+    reused = await bootstrap.load(first_cwd)
+    rebuilt = await bootstrap.load(first_cwd, rebuild=True)
+    changed = await bootstrap.load(second_cwd)
 
     assert reused is first
     assert "First version." in reused.stable_instructions
@@ -159,6 +188,7 @@ def test_runtime_resources_are_reused_until_cwd_changes_or_rebuild_is_requested(
     assert "Rebuilt version." in rebuilt.stable_instructions
     assert changed.cwd == second_cwd.resolve()
     assert "Second cwd." in changed.stable_instructions
+    await bootstrap.close()
 
 
 async def test_compaction_rebuild_keeps_the_exact_assembled_stable_context(
@@ -173,10 +203,11 @@ async def test_compaction_rebuild_keeps_the_exact_assembled_stable_context(
         description="Explain concepts.",
         body="Explain with examples.\n",
     )
-    resources = build_runtime_resources(
+    resources = await build_runtime_resources(
         cwd,
         base_instructions="Phi base.",
         global_skill_root=tmp_path / "global",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
     storage = SessionStorage(tmp_path / "sessions")
@@ -227,7 +258,9 @@ async def test_compaction_rebuild_keeps_the_exact_assembled_stable_context(
     assert after.context.dropped_summary == "Earlier summary."
 
 
-def test_project_skill_discovery_honors_repository_root_ignore_rules(tmp_path: Path) -> None:
+async def test_project_skill_discovery_honors_repository_root_ignore_rules(
+    tmp_path: Path,
+) -> None:
     cwd = tmp_path / "workspace"
     cwd.mkdir()
     (cwd / ".gitignore").write_text(".phi/skills/ignored.md\n", encoding="utf-8")
@@ -238,13 +271,94 @@ def test_project_skill_discovery_honors_repository_root_ignore_rules(tmp_path: P
         body="Ignored body.\n",
     )
 
-    resources = build_runtime_resources(
+    resources = await build_runtime_resources(
         cwd,
         base_instructions="Phi base.",
         global_skill_root=tmp_path / "global",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
         approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
     )
 
     assert resources.skill_discovery.skills == {}
     assert "MODEL-INVOKABLE SKILLS" not in resources.stable_instructions
     assert resources.tools.get("skill_tool") is None
+
+
+async def test_bootstrap_rebuild_cwd_switch_and_shutdown_replace_mcp_lifetimes(
+    tmp_path: Path,
+) -> None:
+    first_cwd = tmp_path / "first"
+    second_cwd = tmp_path / "second"
+    first_cwd.mkdir()
+    second_cwd.mkdir()
+    first_pid_path = tmp_path / "first.pid"
+    second_pid_path = tmp_path / "second.pid"
+    _write_mcp_config(first_cwd, first_pid_path)
+    _write_mcp_config(second_cwd, second_pid_path)
+    bootstrap = CwdRuntimeBootstrap(
+        base_instructions="Phi base.",
+        global_skill_root=tmp_path / "skills",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
+        approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
+    )
+
+    first = await bootstrap.load(first_cwd)
+    first_pid = int(first_pid_path.read_text(encoding="utf-8"))
+    assert first.mcp.server_ids == ("fixture",)
+    assert await bootstrap.load(first_cwd) is first
+
+    rebuilt = await bootstrap.load(first_cwd, rebuild=True)
+    rebuilt_pid = int(first_pid_path.read_text(encoding="utf-8"))
+    assert rebuilt is not first
+    with pytest.raises(ProcessLookupError):
+        os.kill(first_pid, 0)
+
+    changed = await bootstrap.load(second_cwd)
+    changed_pid = int(second_pid_path.read_text(encoding="utf-8"))
+    assert changed.cwd == second_cwd.resolve()
+    with pytest.raises(ProcessLookupError):
+        os.kill(rebuilt_pid, 0)
+
+    await bootstrap.close()
+    await bootstrap.close()
+    with pytest.raises(ProcessLookupError):
+        os.kill(changed_pid, 0)
+
+
+async def test_invalid_mcp_config_fails_closed_without_disabling_non_mcp_runtime(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    config_path = cwd / ".phi" / "mcp.json"
+    config_path.parent.mkdir(parents=True)
+    secret = "diagnostics-must-not-leak-this-value"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "invalid": {
+                        "command": "server",
+                        "env": {"TOKEN": [secret]},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resources = await build_runtime_resources(
+        cwd,
+        base_instructions="Phi base.",
+        global_skill_root=tmp_path / "skills",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
+        approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
+    )
+    try:
+        assert resources.mcp.server_ids == ()
+        assert resources.tools.get("read") is not None
+        assert len(resources.diagnostics) == 1
+        assert isinstance(resources.diagnostics[0], McpConfigDiagnostic)
+        assert resources.diagnostics[0].source_path == config_path
+        assert secret not in repr(resources.diagnostics)
+    finally:
+        await resources.close()
