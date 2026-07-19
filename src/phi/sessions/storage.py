@@ -86,7 +86,20 @@ class SessionStorage:
             committed_entry_count=0,
             metadata=metadata,
         )
-        await asyncio.to_thread(self._create_sync, envelope)
+        creation = asyncio.ensure_future(asyncio.to_thread(self._create_sync, envelope))
+        try:
+            await asyncio.shield(creation)
+        except BaseException:
+            creation_succeeded = False
+            try:
+                await asyncio.shield(creation)
+            except BaseException:
+                pass
+            else:
+                creation_succeeded = True
+            if creation_succeeded:
+                await asyncio.to_thread(self._remove_session_files_sync, session_id)
+            raise
         return envelope
 
     async def load(self, session_id: str) -> SessionMetadataEnvelope:
@@ -97,6 +110,22 @@ class SessionStorage:
 
     async def list_metadata(self) -> list[SessionMetadataEnvelope]:
         return await asyncio.to_thread(self._list_metadata_sync)
+
+    async def rollback_empty_subagent(self, session_id: str) -> None:
+        """Remove a just-created empty Subagent Session after spawn transaction failure."""
+
+        async with self._lock(session_id):
+            state = await self.load_state(session_id)
+            if (
+                state.envelope.metadata.origin != "subagent"
+                or state.envelope.revision != 0
+                or state.entries
+            ):
+                raise CorruptSessionError(
+                    session_id,
+                    "only a new empty Subagent Session can be rolled back",
+                )
+            await asyncio.to_thread(self._rollback_empty_subagent_sync, session_id)
 
     async def replace_metadata(
         self,
@@ -177,10 +206,28 @@ class SessionStorage:
         metadata = self.metadata_path(envelope.metadata.id)
         if journal.exists() or metadata.exists():
             raise CorruptSessionError(envelope.metadata.id, "generated identity already exists")
-        with journal.open("x", encoding="utf-8") as file:
-            file.flush()
-            os.fsync(file.fileno())
-        self._atomic_write_metadata(envelope)
+        journal_created = False
+        try:
+            with journal.open("x", encoding="utf-8") as file:
+                journal_created = True
+                file.flush()
+                os.fsync(file.fileno())
+            self._atomic_write_metadata(envelope)
+        except BaseException:
+            if journal_created:
+                metadata.unlink(missing_ok=True)
+                journal.unlink(missing_ok=True)
+            raise
+
+    def _rollback_empty_subagent_sync(self, session_id: str) -> None:
+        self.trace_path(session_id).unlink(missing_ok=True)
+        self.metadata_path(session_id).unlink()
+        self.journal_path(session_id).unlink()
+
+    def _remove_session_files_sync(self, session_id: str) -> None:
+        self.trace_path(session_id).unlink(missing_ok=True)
+        self.metadata_path(session_id).unlink(missing_ok=True)
+        self.journal_path(session_id).unlink(missing_ok=True)
 
     def _load_sync(self, session_id: str) -> SessionMetadataEnvelope:
         path = self.metadata_path(session_id)

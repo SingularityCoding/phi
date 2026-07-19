@@ -111,6 +111,26 @@ class ToolDispatcher:
             return ToolResult(call_id=call.id, output="", error=output.error)
         return ToolResult(call_id=call.id, output=_serialize_output(output))
 
+    def with_registry(self, registry: ToolRegistry) -> ToolDispatcher:
+        """Bind the same policy and trusted runtime values to a restricted Tool registry."""
+
+        return ToolDispatcher(
+            registry,
+            self._approval_policy,
+            trusted_values=self._trusted_values,
+            default_timeout_seconds=self._default_timeout_seconds,
+        )
+
+    def with_trusted_values(self, trusted_values: Mapping[str, object]) -> ToolDispatcher:
+        """Bind additional trusted values without changing the dispatch call boundary."""
+
+        return ToolDispatcher(
+            self._registry,
+            self._approval_policy,
+            trusted_values={**self._trusted_values, **dict(trusted_values)},
+            default_timeout_seconds=self._default_timeout_seconds,
+        )
+
     @staticmethod
     def _validated_arguments(tool: Tool, arguments: dict[str, Any]) -> dict[str, Any]:
         if tool.args_model is None:

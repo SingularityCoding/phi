@@ -35,10 +35,13 @@ Implemented today:
 - merged global/project stdio MCP configuration, managed client/subprocess lifetimes, isolated
   capability discovery, unconfined Tool dispatch, read-only Resource meta-tools, trusted Prompt
   operations, and connection Events/diagnostics;
+- validated global/project Agent Definition discovery, isolated Delegation through five standard
+  Tools, bounded depth and concurrency, scoped child management, non-destructive steering, and
+  selective Run/runtime lifecycle cleanup;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next implementation boundary is delegation-style Subagents.
+The next implementation boundary is the headless CLI and complete Textual TUI.
 
 ## v1 capability scope
 
@@ -53,7 +56,7 @@ The next implementation boundary is delegation-style Subagents.
 | Context construction and compaction | Complete | Implemented |
 | Project instructions and Agent Skills | Complete | Implemented |
 | stdio MCP tools, resources, prompts, configuration | Complete | Implemented |
-| Delegation-style multi-agent tools | Complete | Not started |
+| Delegation-style multi-agent tools | Complete | Implemented |
 | Headless CLI and complete Textual TUI | Complete | Minimal shell only |
 | Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, and stdio MCP coverage implemented |
 

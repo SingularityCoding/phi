@@ -5,6 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 
+from phi.agents import (
+    AgentDefinitionDiagnostic,
+    AgentDefinitionDiscovery,
+    AgentRuntime,
+    build_agent_tools,
+    discover_agent_definitions,
+)
 from phi.environment import ConfinedEnvironment
 from phi.harness import EventEmitter
 from phi.instructions import ProjectInstructions, load_project_instructions
@@ -27,9 +34,11 @@ from phi.skills import (
     invoke_user_skill,
     render_model_skill_menu,
 )
-from phi.tools import ApprovalPolicy, ToolDispatcher, ToolRegistry, build_default_registry
+from phi.tools import ApprovalPolicy, Tool, ToolDispatcher, ToolRegistry, build_default_registry
 
-type RuntimeDiagnostic = SkillDiagnostic | McpConfigDiagnostic | McpDiagnostic
+type RuntimeDiagnostic = (
+    AgentDefinitionDiagnostic | SkillDiagnostic | McpConfigDiagnostic | McpDiagnostic
+)
 
 
 @dataclass(frozen=True)
@@ -39,9 +48,12 @@ class RuntimeResources:
     cwd: Path
     project_instructions: ProjectInstructions
     skill_discovery: SkillDiscovery
+    agent_definitions: AgentDefinitionDiscovery
     stable_instructions: str
     environment: ConfinedEnvironment
     mcp: McpRuntime
+    agents: AgentRuntime
+    agent_tools: tuple[Tool, ...]
     tools: ToolRegistry
     dispatcher: ToolDispatcher
     diagnostics: tuple[RuntimeDiagnostic, ...]
@@ -68,6 +80,7 @@ class RuntimeResources:
     async def close(self) -> None:
         """Close every long-lived cwd-scoped resource exactly once."""
 
+        await self.agents.close()
         await self.mcp.close()
 
     async def __aenter__(self) -> RuntimeResources:
@@ -93,6 +106,7 @@ class CwdRuntimeBootstrap:
         approval_policy: ApprovalPolicy,
         personal_instructions: str = "",
         global_skill_root: Path | None = None,
+        global_agent_root: Path | None = None,
         global_mcp_config_path: Path | None = None,
         event_bus: EventEmitter[McpEvent] | None = None,
         default_tool_timeout_seconds: float = 30.0,
@@ -100,6 +114,7 @@ class CwdRuntimeBootstrap:
         self._base_instructions = base_instructions
         self._personal_instructions = personal_instructions
         self._global_skill_root = global_skill_root
+        self._global_agent_root = global_agent_root
         self._global_mcp_config_path = global_mcp_config_path
         self._event_bus = event_bus
         self._approval_policy = approval_policy
@@ -123,6 +138,7 @@ class CwdRuntimeBootstrap:
                 base_instructions=self._base_instructions,
                 personal_instructions=self._personal_instructions,
                 global_skill_root=self._global_skill_root,
+                global_agent_root=self._global_agent_root,
                 global_mcp_config_path=self._global_mcp_config_path,
                 approval_policy=self._approval_policy,
                 event_bus=self._event_bus,
@@ -182,6 +198,8 @@ async def build_runtime_resources(
     personal_instructions: str = "",
     global_skill_root: Path | None = None,
     project_skill_root: Path | None = None,
+    global_agent_root: Path | None = None,
+    project_agent_root: Path | None = None,
     global_mcp_config_path: Path | None = None,
     project_mcp_config_path: Path | None = None,
     event_bus: EventEmitter[McpEvent] | None = None,
@@ -203,27 +221,38 @@ async def build_runtime_resources(
         project_instructions=project_instructions,
         skill_discovery=discovery,
     )
+    agent_definitions = discover_agent_definitions(
+        global_root=(global_agent_root or Path("~/.phi/agents")).expanduser(),
+        project_root=project_agent_root or canonical_cwd / ".phi" / "agents",
+        project_ignore_root=canonical_cwd,
+    )
+    agents = AgentRuntime(
+        agent_definitions.definitions,
+        stable_instructions=stable_instructions,
+    )
     registry = build_default_registry()
     skill_tool = build_skill_tool(discovery.skills)
     if skill_tool is not None:
         registry.register(skill_tool)
     config_diagnostics: tuple[McpConfigDiagnostic, ...] = ()
+    mcp = McpRuntime()
     try:
-        mcp_config = await load_merged_mcp_config(
-            (global_mcp_config_path or Path("~/.phi/mcp.json")).expanduser(),
-            project_mcp_config_path or canonical_cwd / ".phi" / "mcp.json",
-        )
-    except McpConfigError as error:
-        mcp = McpRuntime()
-        config_diagnostics = (error.diagnostic,)
-    else:
-        mcp = await connect_mcp_servers(
-            mcp_config,
-            cwd=canonical_cwd,
-            registry=registry,
-            events=event_bus,
-        )
-    try:
+        try:
+            mcp_config = await load_merged_mcp_config(
+                (global_mcp_config_path or Path("~/.phi/mcp.json")).expanduser(),
+                project_mcp_config_path or canonical_cwd / ".phi" / "mcp.json",
+            )
+        except McpConfigError as error:
+            config_diagnostics = (error.diagnostic,)
+        else:
+            mcp = await connect_mcp_servers(
+                mcp_config,
+                cwd=canonical_cwd,
+                registry=registry,
+                events=event_bus,
+            )
+        agent_tools = build_agent_tools(dict(agent_definitions.definitions))
+        registry.register_many(agent_tools)
         dispatcher = ToolDispatcher(
             registry,
             approval_policy,
@@ -234,18 +263,27 @@ async def build_runtime_resources(
             default_timeout_seconds=default_tool_timeout_seconds,
         )
     except BaseException:
+        await agents.close()
         await mcp.close()
         raise
     return RuntimeResources(
         cwd=canonical_cwd,
         project_instructions=project_instructions,
         skill_discovery=discovery,
+        agent_definitions=agent_definitions,
         stable_instructions=stable_instructions,
         environment=environment,
         mcp=mcp,
+        agents=agents,
+        agent_tools=agent_tools,
         tools=registry,
         dispatcher=dispatcher,
-        diagnostics=(*discovery.diagnostics, *config_diagnostics, *mcp.diagnostics),
+        diagnostics=(
+            *discovery.diagnostics,
+            *agent_definitions.diagnostics,
+            *config_diagnostics,
+            *mcp.diagnostics,
+        ),
     )
 
 

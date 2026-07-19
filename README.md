@@ -58,12 +58,21 @@ capabilities:
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
   services rather than separate implementations.
 
-The Model gateway, Tool processing boundary, Harness core, Session/Context services, and the first
-cwd-scoped runtime integrations are implemented today. Phi loads root `AGENTS.md` instructions with
-a `CLAUDE.md` fallback, discovers validated global and project Skills, assembles a stable Context
-prefix, and registers a read-only `skill_tool` through the existing Tool Registry and Dispatcher.
-Model-disabled Skills remain available through a separate trusted user-invocation API without being
-advertised to the Model.
+The Model gateway, Tool processing boundary, Harness core, Session/Context services, cwd-scoped
+runtime integrations, and Delegation-style Subagents are implemented today. Phi loads root
+`AGENTS.md` instructions with a `CLAUDE.md` fallback, discovers validated global and project Skills,
+assembles a stable Context prefix, and registers a read-only `skill_tool` through the existing Tool
+Registry and Dispatcher. Model-disabled Skills remain available through a separate trusted
+user-invocation API without being advertised to the Model.
+
+Phi also discovers Agent Definitions from `~/.phi/agents/` and `.phi/agents/`, with project
+definitions taking precedence. A parent Agent can use `spawn_agent`, `check_agent`, `steer_agent`,
+`list_agents`, and `close_agent` to coordinate isolated child Sessions through the same Harness,
+Tool, Hook, Event, and Trace boundaries. Definitions may restrict Tools and prefer a Model;
+spawn-time selection takes precedence, while child authority can never exceed the invoking Agent's
+Tool Registry. Delegation is bounded to depth three and four concurrently running Subagents per
+cwd-scoped runtime. Unfinished descendants are cancelled and awaited before an owning Run or
+runtime lifetime ends.
 
 Phi also loads stdio MCP servers from `~/.phi/mcp.json` and `.phi/mcp.json`. Project definitions
 replace global definitions with the same server ID, including `"enabled": false` definitions that
@@ -104,9 +113,9 @@ canonically resolves paths, confines them to an explicit workspace root, and den
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. The CLI and TUI remain a minimal shell while Subagents and later roadmap stages
-are built; the Model, Tool, Harness, Session, Context, and cwd runtime services are not yet wired
-into an interactive Host workflow.
+filesystem race. The CLI and TUI remain a minimal shell while the Host roadmap stage is built; the
+Model, Tool, Harness, Session, Context, and cwd runtime services are not yet wired into an
+interactive Host workflow.
 
 ## Design principles
 

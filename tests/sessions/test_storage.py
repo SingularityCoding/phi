@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from uuid import UUID
 
 import pytest
 
 from phi.model import ModelResponse, ScriptedModel
 from phi.sessions import (
+    CorruptSessionError,
     IncompatibleSessionVersionError,
     InvalidSessionLeafError,
     MissingEntryParentError,
@@ -22,6 +25,27 @@ from phi.sessions import (
 )
 from phi.settings import Settings
 from phi.tools import BYPASS_MODE, RuleBasedApprovalPolicy, ToolDispatcher, ToolRegistry
+
+
+async def test_create_collision_preserves_the_existing_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = SessionStorage(tmp_path)
+    existing = await create_session(storage, model="existing-model")
+    journal_before = existing.session_file.read_bytes()
+    metadata_before = storage.metadata_path(existing.session_id).read_bytes()
+
+    def collide_uuid() -> UUID:
+        return UUID(existing.session_id)
+
+    monkeypatch.setattr("phi.sessions.storage.uuid4", collide_uuid)
+
+    with pytest.raises(CorruptSessionError, match="generated identity already exists"):
+        await create_session(storage, model="replacement-model")
+
+    assert existing.session_file.read_bytes() == journal_before
+    assert storage.metadata_path(existing.session_id).read_bytes() == metadata_before
 
 
 async def _completed_session(storage: SessionStorage):

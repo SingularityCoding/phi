@@ -32,6 +32,18 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def select(self, names: tuple[str, ...] | None = None) -> ToolRegistry:
+        """Snapshot all Tools or an ordered explicit subset into a new registry."""
+
+        selected_names = tuple(self._tools) if names is None else names
+        selected: list[Tool] = []
+        for name in selected_names:
+            registered_tool = self._tools.get(name)
+            if registered_tool is None:
+                raise KeyError(name)
+            selected.append(registered_tool)
+        return ToolRegistry(selected)
+
     def specs(self) -> list[dict[str, Any]]:
         return [
             {

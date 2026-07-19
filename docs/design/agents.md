@@ -1,6 +1,6 @@
 # Multi-agent Delegation Design
 
-> **Status:** Design complete; implementation not started.
+> **Status:** Implemented.
 
 ## Scope
 

@@ -17,7 +17,7 @@ from phi.sessions import (
 )
 from phi.settings import Settings
 from phi.skills import SkillNotFoundError
-from phi.tools import DEFAULT_MODE, RuleBasedApprovalPolicy
+from phi.tools import DEFAULT_MODE, ApprovalClass, RuleBasedApprovalPolicy
 
 
 def _write_skill(
@@ -34,6 +34,170 @@ def _write_skill(
         f"---\nname: {name}\ndescription: {description}\n{disabled_line}---\n{body}",
         encoding="utf-8",
     )
+
+
+def _write_agent_definition(
+    source: Path,
+    *,
+    name: str,
+    description: str,
+    body: str,
+    disabled: bool = False,
+    extra_frontmatter: str = "",
+) -> None:
+    source.parent.mkdir(parents=True, exist_ok=True)
+    disabled_line = "disable-model-invocation: true\n" if disabled else ""
+    source.write_text(
+        f"---\nname: {name}\ndescription: {description}\n"
+        f"{disabled_line}{extra_frontmatter}---\n{body}",
+        encoding="utf-8",
+    )
+
+
+async def test_cwd_agent_definitions_drive_the_model_visible_delegation_tools(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    global_root = tmp_path / "global-agents"
+    project_root = cwd / ".phi" / "agents"
+    _write_agent_definition(
+        global_root / "shared.md",
+        name="shared",
+        description="Use the shared specialist.",
+        body="Global specialist instructions.\n",
+    )
+    _write_agent_definition(
+        project_root / "alpha.md",
+        name="alpha",
+        description="Use the alpha specialist.",
+        body="Project specialist instructions.\n",
+    )
+    _write_agent_definition(
+        project_root / "private.md",
+        name="private",
+        description="Trusted callers only.",
+        body="Private specialist instructions.\n",
+        disabled=True,
+    )
+    _write_agent_definition(
+        project_root / "shared.md",
+        name="shared",
+        description="Malformed project override.",
+        body="This invalid override must not erase the global definition.\n",
+        extra_frontmatter="unexpected-field: true\n",
+    )
+
+    resources = await build_runtime_resources(
+        cwd,
+        base_instructions="Phi base.",
+        global_skill_root=tmp_path / "global-skills",
+        global_agent_root=global_root,
+        project_agent_root=project_root,
+        global_mcp_config_path=tmp_path / "global-mcp.json",
+        approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
+    )
+
+    assert tuple(resources.agent_definitions.definitions) == ("shared", "alpha", "private")
+    assert resources.agent_definitions.definitions["shared"].system_prompt == (
+        "Global specialist instructions.\n"
+    )
+    assert any(
+        diagnostic.source_path == project_root / "shared.md"
+        and "unknown field" in diagnostic.reason
+        for diagnostic in resources.agent_definitions.diagnostics
+    )
+    assert [tool.name for tool in resources.agent_tools] == [
+        "spawn_agent",
+        "check_agent",
+        "steer_agent",
+        "list_agents",
+        "close_agent",
+    ]
+    spawn_tool = resources.tools.get("spawn_agent")
+    assert spawn_tool is not None
+    assert spawn_tool.approval_class is ApprovalClass.UNCONFINED
+    for name in ("check_agent", "steer_agent", "list_agents", "close_agent"):
+        management_tool = resources.tools.get(name)
+        assert management_tool is not None
+        assert management_tool.approval_class is ApprovalClass.READ_ONLY
+    spawn_spec = next(
+        spec for spec in resources.tools.specs() if spec["function"]["name"] == "spawn_agent"
+    )
+    assert "- `alpha`: Use the alpha specialist." in spawn_spec["function"]["description"]
+    assert "- `shared`: Use the shared specialist." in spawn_spec["function"]["description"]
+    assert "private" not in spawn_spec["function"]["description"]
+    assert resources.tools.get("wait_agent") is None
+    await resources.close()
+
+
+async def test_project_agent_discovery_honors_package_ignore_and_symlink_boundaries(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    project_root = cwd / ".phi" / "agents"
+    (cwd / ".gitignore").write_text(
+        ".phi/agents/ignored.md\n",
+        encoding="utf-8",
+    )
+    _write_agent_definition(
+        project_root / "ignored.md",
+        name="ignored",
+        description="Ignored definition.",
+        body="Ignored.\n",
+    )
+    _write_agent_definition(
+        project_root / "package-name" / "AGENT.md",
+        name="package-name",
+        description="Packaged definition.",
+        body="Packaged.\n",
+    )
+    _write_agent_definition(
+        project_root / "a" / "duplicate.md",
+        name="duplicate",
+        description="First valid definition.",
+        body="First.\n",
+    )
+    _write_agent_definition(
+        project_root / "b" / "duplicate.md",
+        name="duplicate",
+        description="Later colliding definition.",
+        body="Second.\n",
+    )
+    _write_agent_definition(
+        project_root / "node_modules" / "pruned.md",
+        name="pruned",
+        description="Pruned definition.",
+        body="Pruned.\n",
+    )
+    external = tmp_path / "linked.md"
+    _write_agent_definition(
+        external,
+        name="linked",
+        description="Linked definition.",
+        body="Linked.\n",
+    )
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "linked.md").symlink_to(external)
+
+    resources = await build_runtime_resources(
+        cwd,
+        base_instructions="Phi base.",
+        global_skill_root=tmp_path / "global-skills",
+        global_agent_root=tmp_path / "global-agents",
+        global_mcp_config_path=tmp_path / "global-mcp.json",
+        approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
+    )
+
+    assert tuple(resources.agent_definitions.definitions) == ("duplicate", "package-name")
+    assert resources.agent_definitions.definitions["duplicate"].system_prompt == "First.\n"
+    assert any(
+        diagnostic.source_path == project_root / "b" / "duplicate.md"
+        and "collision" in diagnostic.reason
+        for diagnostic in resources.agent_definitions.diagnostics
+    )
+    await resources.close()
 
 
 def _write_mcp_config(cwd: Path, pid_path: Path) -> None:
@@ -323,6 +487,48 @@ async def test_bootstrap_rebuild_cwd_switch_and_shutdown_replace_mcp_lifetimes(
     await bootstrap.close()
     with pytest.raises(ProcessLookupError):
         os.kill(changed_pid, 0)
+
+
+async def test_bootstrap_closes_started_mcp_when_agent_tool_construction_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+
+    class FakeMcpRuntime:
+        diagnostics: tuple[()] = ()
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    fake_mcp = FakeMcpRuntime()
+
+    async def connect_fake_mcp(*args: object, **kwargs: object) -> FakeMcpRuntime:
+        del args, kwargs
+        return fake_mcp
+
+    def fail_agent_tool_construction(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("agent tool construction failed")
+
+    monkeypatch.setattr("phi.bootstrap.connect_mcp_servers", connect_fake_mcp)
+    monkeypatch.setattr("phi.bootstrap.build_agent_tools", fail_agent_tool_construction)
+
+    with pytest.raises(RuntimeError, match="agent tool construction failed"):
+        await build_runtime_resources(
+            cwd,
+            base_instructions="Phi base.",
+            global_skill_root=tmp_path / "global-skills",
+            global_agent_root=tmp_path / "global-agents",
+            global_mcp_config_path=tmp_path / "global-mcp.json",
+            approval_policy=RuleBasedApprovalPolicy(DEFAULT_MODE),
+        )
+
+    assert fake_mcp.closed
 
 
 async def test_invalid_mcp_config_fails_closed_without_disabling_non_mcp_runtime(

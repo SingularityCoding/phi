@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
+from uuid import uuid4
 
 from phi.harness import (
     AtomicConversationUnit,
@@ -22,6 +24,7 @@ from phi.harness import (
     NothingToCompactError,
     PromptBudgetAnchor,
     RunEvent,
+    RunFinished,
     RunResult,
     RunStatus,
     Step,
@@ -84,6 +87,40 @@ class ConversationView:
     dropped_summary: str | None = None
 
 
+@dataclass(frozen=True)
+class RunInvocation:
+    """Dependencies bound to one exact Harness Run for lifecycle extensions."""
+
+    run_id: str
+    session_id: str
+    selected_model: str | None
+    storage: SessionStorage
+    settings: Settings
+    model: Model
+    model_info: ModelInfo | None
+    tools: ToolRegistry
+    dispatcher: ToolDispatcher
+    stable_instructions: str
+    max_steps: int
+    hooks: Hooks | None
+
+
+class RunLifecycle(Protocol):
+    """Generic service-boundary interception for exact Run lifetime ownership."""
+
+    async def before_run(
+        self,
+        invocation: RunInvocation,
+        context: object | None,
+    ) -> Mapping[str, object]: ...
+
+    async def after_run(
+        self,
+        invocation: RunInvocation,
+        context: object | None,
+    ) -> None: ...
+
+
 @dataclass
 class _ObservedStep:
     index: int
@@ -95,6 +132,25 @@ class _ObservedStep:
 @dataclass
 class _ActiveSend:
     handle: SessionHandle
+
+
+class _RunEventBoundary:
+    """Hold terminal notifications until Session-owned lifecycle cleanup finishes."""
+
+    def __init__(self, event_bus: EventBus[RunEvent]) -> None:
+        self._event_bus = event_bus
+        self._terminal_events: dict[str, RunFinished] = {}
+
+    async def emit(self, event: RunEvent) -> None:
+        if isinstance(event, RunFinished):
+            self._terminal_events[event.run_id] = event
+            return
+        await self._event_bus.emit(event)
+
+    async def finish(self, run_id: str) -> None:
+        event = self._terminal_events.pop(run_id, None)
+        if event is not None:
+            await self._event_bus.emit(event)
 
 
 class _SafeStepRecorder:
@@ -439,6 +495,8 @@ async def send_message(
     max_steps: int,
     hooks: Hooks | None = None,
     events: EventEmitter[RunEvent] | None = None,
+    lifecycle: RunLifecycle | None = None,
+    lifecycle_context: object | None = None,
 ) -> tuple[SessionHandle, RunResult]:
     if not text.strip():
         raise ValueError("User messages must not be empty")
@@ -470,6 +528,8 @@ async def send_message(
             max_steps=max_steps,
             hooks=hooks,
             run_events=run_events,
+            lifecycle=lifecycle,
+            lifecycle_context=lifecycle_context,
         )
     except asyncio.CancelledError:
         return await _cancelled_result(storage, active.handle, step_recorder, trace_writer)
@@ -489,7 +549,9 @@ async def _continue_send(
     stable_instructions: str,
     max_steps: int,
     hooks: Hooks | None,
-    run_events: EventEmitter[RunEvent],
+    run_events: _RunEventBoundary,
+    lifecycle: RunLifecycle | None,
+    lifecycle_context: object | None,
 ) -> tuple[SessionHandle, RunResult]:
     handle = active.handle
     inspection = await inspect_context(
@@ -557,13 +619,26 @@ async def _continue_send(
                 raise ContextCapacityError(
                     "Context remains over the safe prompt limit after one compaction"
                 )
-    result = await run(
-        request,
-        model,
-        dispatcher,
+    invocation = RunInvocation(
+        run_id=str(uuid4()),
+        session_id=handle.session_id,
+        selected_model=selected_model,
+        storage=storage,
+        settings=settings,
+        model=model,
+        model_info=model_info,
+        tools=tools,
+        dispatcher=dispatcher,
+        stable_instructions=stable_instructions,
         max_steps=max_steps,
         hooks=hooks,
-        event_bus=run_events,
+    )
+    result = await _execute_run(
+        request,
+        invocation=invocation,
+        run_events=run_events,
+        lifecycle=lifecycle,
+        lifecycle_context=lifecycle_context,
     )
 
     if (
@@ -599,13 +674,12 @@ async def _continue_send(
             stable_instructions=stable_instructions,
         )
         retry_request = retry_inspection.context.to_request(model=selected_model)
-        result = await run(
+        result = await _execute_run(
             retry_request,
-            model,
-            dispatcher,
-            max_steps=max_steps,
-            hooks=hooks,
-            event_bus=run_events,
+            invocation=replace(invocation, run_id=str(uuid4())),
+            run_events=run_events,
+            lifecycle=lifecycle,
+            lifecycle_context=lifecycle_context,
         )
 
     completed_entries = _entries_from_steps(handle.leaf_id, result)
@@ -626,6 +700,38 @@ async def _continue_send(
         )
         active.handle = handle
     return handle, result
+
+
+async def _execute_run(
+    request: ModelRequest,
+    *,
+    invocation: RunInvocation,
+    run_events: _RunEventBoundary,
+    lifecycle: RunLifecycle | None,
+    lifecycle_context: object | None,
+) -> RunResult:
+    trusted_tool_values: Mapping[str, object] = {}
+    entered = False
+    if lifecycle is not None:
+        trusted_tool_values = await lifecycle.before_run(invocation, lifecycle_context)
+        entered = True
+    try:
+        active_dispatcher = invocation.dispatcher.with_trusted_values(trusted_tool_values)
+        result = await run(
+            request,
+            invocation.model,
+            active_dispatcher,
+            max_steps=invocation.max_steps,
+            hooks=invocation.hooks,
+            event_bus=run_events,
+            run_id=invocation.run_id,
+        )
+    finally:
+        if entered:
+            assert lifecycle is not None
+            await lifecycle.after_run(invocation, lifecycle_context)
+    await run_events.finish(invocation.run_id)
+    return result
 
 
 def _handle(
@@ -696,13 +802,13 @@ def _run_event_bus(
     storage: SessionStorage,
     handle: SessionHandle,
     external: EventEmitter[RunEvent] | None,
-) -> tuple[EventBus[RunEvent], _SafeStepRecorder, TraceWriter]:
+) -> tuple[_RunEventBoundary, _SafeStepRecorder, TraceWriter]:
     recorder = _SafeStepRecorder()
     trace_writer = TraceWriter(storage.trace_path(handle.session_id))
     listeners: list[EventListener[RunEvent]] = [recorder, trace_writer]
     if external is not None:
         listeners.append(external.emit)
-    return EventBus[RunEvent](listeners), recorder, trace_writer
+    return _RunEventBoundary(EventBus[RunEvent](listeners)), recorder, trace_writer
 
 
 async def _cancelled_result(

@@ -21,6 +21,8 @@ from phi.sessions.errors import (
 from phi.sessions.metadata import SessionMetadata
 from phi.sessions.service import (
     ConversationView,
+    RunInvocation,
+    RunLifecycle,
     SessionHandle,
     create_session,
     fork_session,
@@ -47,6 +49,8 @@ __all__ = [
     "InvalidSessionLeafError",
     "MissingEntryParentError",
     "PromptBudgetAnchor",
+    "RunInvocation",
+    "RunLifecycle",
     "SessionError",
     "SessionHandle",
     "SessionLineageCycleError",
