@@ -132,6 +132,7 @@ class _ObservedStep:
 @dataclass
 class _ActiveSend:
     handle: SessionHandle
+    run_id: str | None = None
 
 
 class _RunEventBoundary:
@@ -140,8 +141,10 @@ class _RunEventBoundary:
     def __init__(self, event_bus: EventBus[RunEvent]) -> None:
         self._event_bus = event_bus
         self._terminal_events: dict[str, RunFinished] = {}
+        self._next_indexes: dict[str, int] = {}
 
     async def emit(self, event: RunEvent) -> None:
+        self._next_indexes[event.run_id] = event.event_index + 1
         if isinstance(event, RunFinished):
             self._terminal_events[event.run_id] = event
             return
@@ -151,6 +154,16 @@ class _RunEventBoundary:
         event = self._terminal_events.pop(run_id, None)
         if event is not None:
             await self._event_bus.emit(event)
+        self._next_indexes.pop(run_id, None)
+
+    async def cancel(self, run_id: str, result: RunResult) -> None:
+        pending = self._terminal_events.pop(run_id, None)
+        next_index = self._next_indexes.pop(run_id, None)
+        if pending is None and next_index is None:
+            return
+        event_index = pending.event_index if pending is not None else next_index
+        assert event_index is not None
+        await self._event_bus.emit(RunFinished(run_id, event_index, result))
 
 
 class _SafeStepRecorder:
@@ -532,7 +545,15 @@ async def send_message(
             lifecycle_context=lifecycle_context,
         )
     except asyncio.CancelledError:
-        return await _cancelled_result(storage, active.handle, step_recorder, trace_writer)
+        cancelled_handle, result = await _cancelled_result(
+            storage,
+            active.handle,
+            step_recorder,
+            trace_writer,
+        )
+        if active.run_id is not None:
+            await run_events.cancel(active.run_id, result)
+        return cancelled_handle, result
 
 
 async def _continue_send(
@@ -633,6 +654,7 @@ async def _continue_send(
         max_steps=max_steps,
         hooks=hooks,
     )
+    active.run_id = invocation.run_id
     result = await _execute_run(
         request,
         invocation=invocation,
@@ -674,9 +696,11 @@ async def _continue_send(
             stable_instructions=stable_instructions,
         )
         retry_request = retry_inspection.context.to_request(model=selected_model)
+        retry_invocation = replace(invocation, run_id=str(uuid4()))
+        active.run_id = retry_invocation.run_id
         result = await _execute_run(
             retry_request,
-            invocation=replace(invocation, run_id=str(uuid4())),
+            invocation=retry_invocation,
             run_events=run_events,
             lifecycle=lifecycle,
             lifecycle_context=lifecycle_context,

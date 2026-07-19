@@ -38,6 +38,7 @@ from phi.sessions.service import (
     switch_leaf,
 )
 from phi.sessions.storage import SessionStorage
+from phi.sessions.trace import redact_text, serialize_run_event
 
 __all__ = [
     "AssistantMessageEntry",
@@ -68,8 +69,10 @@ __all__ = [
     "manual_compact",
     "materialize_conversation",
     "rename_session",
+    "redact_text",
     "resume_session",
     "select_model",
+    "serialize_run_event",
     "send_message",
     "switch_leaf",
 ]

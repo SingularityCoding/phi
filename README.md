@@ -74,6 +74,33 @@ Tool Registry. Delegation is bounded to depth three and four concurrently runnin
 cwd-scoped runtime. Unfinished descendants are cancelled and awaited before an owning Run or
 runtime lifetime ends.
 
+The first Host slice is also available. `phi run` starts one bounded Run in a durable Session,
+loads the cwd-scoped runtime, and supports Session resume, explicit Model selection, a Step budget,
+and live redacted JSONL Events. The rest of the designed headless command surface and the complete
+Textual TUI remain pending.
+
+## Run one task
+
+Configure `PHI_API_KEY` and `PHI_DEFAULT_MODEL` in `.env`, then run a quoted task:
+
+```bash
+uv run phi run "inspect this repository and summarize its test strategy"
+```
+
+The completed assistant output is the only content written to stdout. Phi reports the effective
+Session separately on stderr as `session_id=<id>`; pass it back to continue the same current leaf:
+
+```bash
+uv run phi run "now identify the highest-risk gap" --session <id>
+```
+
+The command also accepts `--model <name>`, `--max-steps <positive-integer>`, and `--json`. JSON mode
+writes one redacted, versioned Run Event per stdout line and does not append a plain-text summary.
+Headless approval automatically allows read-only Tools and denies workspace-mutating or unconfined
+Tools as ordinary Tool Results. Completed, failed, Step-budget-exhausted, and cancelled Runs exit
+with status 0, 1, 2, and 130 respectively. Bare `uv run phi` still launches the minimal Textual
+shell.
+
 Phi also loads stdio MCP servers from `~/.phi/mcp.json` and `.phi/mcp.json`. Project definitions
 replace global definitions with the same server ID, including `"enabled": false` definitions that
 disable a global server for one project:
@@ -113,9 +140,8 @@ canonically resolves paths, confines them to an explicit workspace root, and den
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. The CLI and TUI remain a minimal shell while the Host roadmap stage is built; the
-Model, Tool, Harness, Session, Context, and cwd runtime services are not yet wired into an
-interactive Host workflow.
+filesystem race. `phi run` exposes the Model, Harness, Session, Context, and cwd runtime services
+through the persistent headless Host; the complete Textual interaction workflow is still pending.
 
 ## Design principles
 

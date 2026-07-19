@@ -38,10 +38,13 @@ Implemented today:
 - validated global/project Agent Definition discovery, isolated Delegation through five standard
   Tools, bounded depth and concurrency, scoped child management, non-destructive steering, and
   selective Run/runtime lifecycle cleanup;
+- persistent `phi run` headless execution with durable Session create/resume, Model selection and
+  implicit Forks, bounded Steps, redacted JSONL Events, fail-closed non-interactive approval,
+  documented exit statuses, and complete cwd-runtime cleanup;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next implementation boundary is the headless CLI and complete Textual TUI.
+The next Hosts boundary is the remaining headless command surface and complete Textual TUI.
 
 ## v1 capability scope
 
@@ -57,8 +60,8 @@ The next implementation boundary is the headless CLI and complete Textual TUI.
 | Project instructions and Agent Skills | Complete | Implemented |
 | stdio MCP tools, resources, prompts, configuration | Complete | Implemented |
 | Delegation-style multi-agent tools | Complete | Implemented |
-| Headless CLI and complete Textual TUI | Complete | Minimal shell only |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, and stdio MCP coverage implemented |
+| Headless CLI and complete Textual TUI | Complete | Partial: persistent `phi run` implemented; remaining commands and complete TUI pending |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, stdio MCP, Delegation, and `phi run` coverage implemented |
 
 ## Implementation sequence
 

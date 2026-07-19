@@ -82,6 +82,11 @@ PLAN_MODE = ApprovalMode(
     _class_rules(RuleDecision.ALLOW, RuleDecision.DENY, RuleDecision.DENY),
     RuleDecision.DENY,
 )
+HEADLESS_MODE = ApprovalMode(
+    "headless",
+    _class_rules(RuleDecision.ALLOW, RuleDecision.DENY, RuleDecision.DENY),
+    RuleDecision.DENY,
+)
 BYPASS_MODE = ApprovalMode(
     "bypass",
     _class_rules(RuleDecision.ALLOW, RuleDecision.ALLOW, RuleDecision.ALLOW),

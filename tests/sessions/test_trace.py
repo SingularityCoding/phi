@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 
-from phi.model import ModelHTTPError, ModelResponse, ScriptedModel, ToolCall, Usage
+from phi.harness import ModelCallStarted
+from phi.model import ModelHTTPError, ModelRequest, ModelResponse, ScriptedModel, ToolCall, Usage
 from phi.sessions import (
     SessionStorage,
     create_session,
     materialize_conversation,
     resume_session,
     send_message,
+    serialize_run_event,
 )
 from phi.settings import Settings
 from phi.tools import (
@@ -100,3 +102,34 @@ async def test_provider_error_credentials_are_redacted_from_trace_text(tmp_path)
     assert plain_secret not in trace_text
     assert bearer_secret not in trace_text
     assert "[REDACTED]" in trace_text
+
+
+def test_shared_run_event_serializer_returns_the_redacted_trace_schema() -> None:
+    event = ModelCallStarted(
+        run_id="run-1",
+        event_index=3,
+        step_index=1,
+        request=ModelRequest(
+            messages=[{"role": "user", "content": "api_key=secret-value"}],
+            model="model-a",
+        ),
+    )
+
+    record = serialize_run_event(event)
+
+    assert record == {
+        "schema_version": 1,
+        "event_type": "model_call_started",
+        "run_id": "run-1",
+        "event_index": 3,
+        "step_index": 1,
+        "payload": {
+            "request": {
+                "messages": [{"role": "user", "content": "api_key=[REDACTED]"}],
+                "tools": [],
+                "model": "model-a",
+                "temperature": None,
+                "max_tokens": None,
+            }
+        },
+    }

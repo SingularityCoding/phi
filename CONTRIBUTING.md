@@ -31,13 +31,20 @@ and documentation.
 
 ## Run the current application
 
-The bare command currently launches the minimal Textual shell:
+Run one persistent headless task with the configured Model:
+
+```bash
+uv run phi run "summarize this repository"
+```
+
+The bare command continues to launch the minimal Textual shell:
 
 ```bash
 uv run phi
 ```
 
-Commands documented in system-design documents are not available until their code and tests land.
+Other commands documented only in system-design documents are unavailable until their code and
+tests land.
 
 ## Required validation
 

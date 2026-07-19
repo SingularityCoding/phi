@@ -65,7 +65,7 @@ class TraceWriter:
         self._pending: list[str] = []
 
     async def __call__(self, event: RunEvent) -> None:
-        record = _event_record(event)
+        record = serialize_run_event(event)
         line = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         async with self._lock:
             self._pending.append(line)
@@ -94,7 +94,9 @@ class TraceWriter:
             os.fsync(file.fileno())
 
 
-def _event_record(event: RunEvent) -> dict[str, Any]:
+def serialize_run_event(event: RunEvent) -> dict[str, Any]:
+    """Convert one Run Event to the shared redacted Trace/Host record schema."""
+
     record: dict[str, Any] = {
         "schema_version": TRACE_SCHEMA_VERSION,
         "event_type": _event_type(event),
@@ -222,7 +224,7 @@ def _usage(usage: Usage | None) -> dict[str, int | None] | None:
 def _error(error: Exception | None) -> dict[str, str] | None:
     if error is None:
         return None
-    return {"type": type(error).__name__, "message": _safe_text(str(error))}
+    return {"type": type(error).__name__, "message": redact_text(str(error))}
 
 
 def _redact(value: Any, *, key: str | None = None) -> Any:
@@ -233,10 +235,10 @@ def _redact(value: Any, *, key: str | None = None) -> Any:
     if isinstance(value, (list, tuple)):
         return [_redact(item) for item in value]
     if isinstance(value, str):
-        return _safe_text(value)
+        return redact_text(value)
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return _safe_text(str(value))
+    return redact_text(str(value))
 
 
 def _is_credential_key(key: str) -> bool:
@@ -246,7 +248,9 @@ def _is_credential_key(key: str) -> bool:
     )
 
 
-def _safe_text(value: str) -> str:
+def redact_text(value: str) -> str:
+    """Redact credential-shaped values and bound text for safe user-visible output."""
+
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
     redacted = _QUOTED_CREDENTIAL_PATTERN.sub(
         lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(2)}",

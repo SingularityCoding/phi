@@ -1,6 +1,7 @@
 # CLI and TUI Hosts Design
 
-> **Status:** Design complete; only the bare CLI and minimal Textual shell are implemented.
+> **Status:** Design complete; persistent `phi run` and the minimal Textual shell are implemented.
+> The remaining CLI commands and complete TUI are pending.
 
 ## Host boundary
 

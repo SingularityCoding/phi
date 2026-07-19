@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
+
+import httpx
 
 from phi.agents import (
     AgentDefinitionDiagnostic,
@@ -14,7 +18,7 @@ from phi.agents import (
 )
 from phi.environment import ConfinedEnvironment
 from phi.harness import EventEmitter
-from phi.instructions import ProjectInstructions, load_project_instructions
+from phi.instructions import PHI_BASE_INSTRUCTIONS, ProjectInstructions, load_project_instructions
 from phi.mcp import (
     McpConfigDiagnostic,
     McpConfigError,
@@ -26,6 +30,15 @@ from phi.mcp import (
     connect_mcp_servers,
     load_merged_mcp_config,
 )
+from phi.model import (
+    Model,
+    ModelConfig,
+    ModelInfo,
+    OpenAICompatibleModel,
+    list_available_models,
+)
+from phi.sessions import SessionStorage
+from phi.settings import Settings
 from phi.skills import (
     SkillDiagnostic,
     SkillDiscovery,
@@ -34,7 +47,15 @@ from phi.skills import (
     invoke_user_skill,
     render_model_skill_menu,
 )
-from phi.tools import ApprovalPolicy, Tool, ToolDispatcher, ToolRegistry, build_default_registry
+from phi.tools import (
+    HEADLESS_MODE,
+    ApprovalPolicy,
+    RuleBasedApprovalPolicy,
+    Tool,
+    ToolDispatcher,
+    ToolRegistry,
+    build_default_registry,
+)
 
 type RuntimeDiagnostic = (
     AgentDefinitionDiagnostic | SkillDiagnostic | McpConfigDiagnostic | McpDiagnostic
@@ -80,8 +101,10 @@ class RuntimeResources:
     async def close(self) -> None:
         """Close every long-lived cwd-scoped resource exactly once."""
 
-        await self.agents.close()
-        await self.mcp.close()
+        try:
+            await self.agents.close()
+        finally:
+            await self.mcp.close()
 
     async def __aenter__(self) -> RuntimeResources:
         return self
@@ -94,6 +117,90 @@ class RuntimeResources:
     ) -> None:
         del exc_type, exc_value, traceback
         await self.close()
+
+
+class HostConfigurationError(ValueError):
+    """Trusted Settings cannot produce a usable production Host runtime."""
+
+
+@dataclass
+class HostRuntime:
+    """One reusable Host lifetime for Model, Session, and cwd-scoped resources."""
+
+    settings: Settings
+    model: Model
+    available_models: tuple[ModelInfo, ...]
+    storage: SessionStorage
+    resources: RuntimeResources
+    close_callback: Callable[[], Awaitable[object]] | None = None
+    _closed: bool = False
+
+    async def close(self) -> None:
+        """Settle Agent/MCP resources before closing the owned Model transport."""
+
+        if self._closed:
+            return
+        self._closed = True
+        resource_error: BaseException | None = None
+        try:
+            await self.resources.close()
+        except BaseException as error:
+            resource_error = error
+        try:
+            if self.close_callback is not None:
+                await self.close_callback()
+        except BaseException:
+            if resource_error is None:
+                raise
+        if resource_error is not None:
+            raise resource_error
+
+
+def model_config_from_settings(settings: Settings) -> ModelConfig:
+    """Construct trusted Model configuration without coupling the Model package to Settings."""
+
+    api_key = settings.api_key.get_secret_value()
+    if not api_key.strip():
+        raise HostConfigurationError("PHI_API_KEY is required")
+    if not settings.base_url.strip():
+        raise HostConfigurationError("PHI_BASE_URL must not be empty")
+    if not math.isfinite(settings.request_timeout_seconds) or settings.request_timeout_seconds <= 0:
+        raise HostConfigurationError("PHI_REQUEST_TIMEOUT_SECONDS must be finite and positive")
+    return ModelConfig(
+        base_url=settings.base_url,
+        api_key=settings.api_key,
+        default_model=settings.default_model,
+        request_timeout_seconds=settings.request_timeout_seconds,
+    )
+
+
+async def build_host_runtime(cwd: Path) -> HostRuntime:
+    """Build the production Settings, Model catalog, Sessions, and cwd lifetime once."""
+
+    settings = Settings()
+    config = model_config_from_settings(settings)
+    client = httpx.AsyncClient()
+    resources: RuntimeResources | None = None
+    try:
+        available_models = tuple(await list_available_models(config, client=client))
+        resources = await build_runtime_resources(
+            cwd,
+            base_instructions=PHI_BASE_INSTRUCTIONS,
+            approval_policy=RuleBasedApprovalPolicy(HEADLESS_MODE),
+        )
+    except BaseException:
+        if resources is not None:
+            await resources.close()
+        await client.aclose()
+        raise
+    return HostRuntime(
+        settings=settings,
+        model=OpenAICompatibleModel(config, client=client),
+        available_models=available_models,
+        storage=SessionStorage(settings.session_dir),
+        resources=resources,
+        close_callback=client.aclose,
+    )
 
 
 class CwdRuntimeBootstrap:
@@ -263,8 +370,10 @@ async def build_runtime_resources(
             default_timeout_seconds=default_tool_timeout_seconds,
         )
     except BaseException:
-        await agents.close()
-        await mcp.close()
+        try:
+            await agents.close()
+        finally:
+            await mcp.close()
         raise
     return RuntimeResources(
         cwd=canonical_cwd,

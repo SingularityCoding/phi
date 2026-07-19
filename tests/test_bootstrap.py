@@ -4,10 +4,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
-from phi.bootstrap import CwdRuntimeBootstrap, build_runtime_resources
+from phi.bootstrap import CwdRuntimeBootstrap, build_host_runtime, build_runtime_resources
 from phi.mcp import McpConfigDiagnostic
-from phi.model import ModelResponse, ScriptedModel
+from phi.model import ModelConfig, ModelInfo, ModelResponse, ScriptedModel
 from phi.sessions import (
     SessionStorage,
     create_session,
@@ -568,3 +569,87 @@ async def test_invalid_mcp_config_fails_closed_without_disabling_non_mcp_runtime
         assert secret not in repr(resources.diagnostics)
     finally:
         await resources.close()
+
+
+async def test_host_runtime_composes_one_catalog_client_and_closes_it_once(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    settings = Settings(
+        api_key=SecretStr("test-key"),
+        default_model="model-a",
+        session_dir=tmp_path / "sessions",
+    )
+
+    class ObservableClient:
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        async def aclose(self) -> None:
+            self.close_count += 1
+
+    client = ObservableClient()
+    catalogs: list[tuple[ModelConfig, object]] = []
+
+    async def static_catalog(
+        config: ModelConfig,
+        *,
+        client: object,
+    ) -> list[ModelInfo]:
+        catalogs.append((config, client))
+        return [ModelInfo("model-a", max_input_tokens=8_000)]
+
+    monkeypatch.setattr("phi.bootstrap.Settings", lambda: settings)
+    monkeypatch.setattr("phi.bootstrap.httpx.AsyncClient", lambda: client)
+    monkeypatch.setattr("phi.bootstrap.list_available_models", static_catalog)
+
+    runtime = await build_host_runtime(cwd)
+
+    assert len(catalogs) == 1
+    config, catalog_client = catalogs[0]
+    assert config.default_model == "model-a"
+    assert config.api_key.get_secret_value() == "test-key"
+    assert catalog_client is client
+    assert runtime.available_models == (ModelInfo("model-a", max_input_tokens=8_000),)
+    assert runtime.storage.root == tmp_path / "sessions"
+    assert "Agent composed from a Model and a Harness" in runtime.resources.stable_instructions
+
+    await runtime.close()
+    await runtime.close()
+
+    assert client.close_count == 1
+
+
+async def test_host_runtime_closes_its_client_when_model_catalog_loading_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        api_key=SecretStr("test-key"),
+        default_model="model-a",
+        session_dir=tmp_path / "sessions",
+    )
+
+    class ObservableClient:
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        async def aclose(self) -> None:
+            self.close_count += 1
+
+    client = ObservableClient()
+
+    async def failed_catalog(*args: object, **kwargs: object) -> list[ModelInfo]:
+        del args, kwargs
+        raise RuntimeError("catalog failed")
+
+    monkeypatch.setattr("phi.bootstrap.Settings", lambda: settings)
+    monkeypatch.setattr("phi.bootstrap.httpx.AsyncClient", lambda: client)
+    monkeypatch.setattr("phi.bootstrap.list_available_models", failed_catalog)
+
+    with pytest.raises(RuntimeError, match="catalog failed"):
+        await build_host_runtime(tmp_path)
+
+    assert client.close_count == 1
