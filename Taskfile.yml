@@ -56,6 +56,12 @@ tasks:
     cmds:
       - uv run pytest {{.CLI_ARGS}}
 
+  behavioral-evals:
+    desc: Run opt-in live Agent behavioral evaluations
+    cmds:
+      - PHI_RUN_BEHAVIORAL_EVALS=1 uv run pytest -m behavioral
+        tests/evaluation/test_behavioral.py {{.CLI_ARGS}}
+
   check:
     desc: Run all required handoff checks without modifying files
     cmds:

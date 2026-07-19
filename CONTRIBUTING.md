@@ -113,10 +113,30 @@ that generated directory to GitHub Pages.
 - Behavioral evaluations should inspect the final Environment state rather than trusting the
   model's self-report.
 
+The default suite includes offline tests of the behavioral-evaluation runner and validators with a
+Scripted Model. Live Model contracts exercise only the Model protocol boundary. Live behavioral
+evaluations instead run complete bounded Agent tasks through the headless application operation and
+accept them from isolated Environment state, durable Session data, and redacted Trace diagnostics.
+
 Run the opt-in Model contracts only with configured Proxy credentials:
 
 ```bash
 PHI_RUN_MODEL_CONTRACTS=1 uv run pytest -m contract tests/model/test_contract.py
+```
+
+Run the five-scenario live behavioral matrix with the same configured `PHI_API_KEY` and
+`PHI_DEFAULT_MODEL`:
+
+```bash
+task behavioral-evals
+```
+
+An explicit opt-in fails when credentials, the default Model, or Model discovery are unavailable;
+without opt-in the live scenarios are collected and skipped. Select one scenario by its visible
+pytest ID while iterating:
+
+```bash
+task behavioral-evals -- -k stale-path-recovery
 ```
 
 ## Dependencies and generated files

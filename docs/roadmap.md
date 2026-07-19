@@ -45,10 +45,15 @@ Implemented today:
 - remaining v1 headless commands for validated Session list/resume/exact Fork, complete Context
   inspection, atomic project/global MCP configuration management, and bounded Model settings/Proxy
   diagnostics;
+- a test-only behavioral-evaluation runner with isolated workspace, Session, Skill, Agent
+  Definition, and MCP roots; byte-preserving Environment deltas; deterministic validators; safe
+  Session/Trace diagnostics; offline Scripted Model coverage; and a five-scenario opt-in live Agent
+  matrix;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - offline behavioral tests for CLI and complete TUI workflows.
 
-The Hosts boundary is complete; the next stage is cross-capability hardening and evaluation.
+The Hosts boundary and first behavioral-evaluation slice are complete. Broader cross-capability
+Hardening remains in progress.
 
 ## v1 capability scope
 
@@ -65,7 +70,7 @@ The Hosts boundary is complete; the next stage is cross-capability hardening and
 | stdio MCP tools, resources, prompts, configuration | Complete | Implemented |
 | Delegation-style multi-agent tools | Complete | Implemented |
 | Headless CLI and complete Textual TUI | Complete | Implemented |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, stdio MCP, Delegation, and both Host workflows covered offline; broader behavioral evaluations remain |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Component and Host workflows covered offline; isolated behavioral runner and opt-in live Agent matrix implemented; persistence-corruption, security-race, cancellation-race, and documentation-verification matrices remain |
 
 ## Implementation sequence
 
@@ -108,6 +113,6 @@ These decisions may be made when the relevant capability lands:
 
 - how the default `ConfinedEnvironment.root` is selected and overridden;
 - final small-file placement for support values such as directory and execution result types;
-- the detailed contract-test and behavioral-evaluation matrix;
+- the detailed persistence-corruption, security-race, cancellation-race, and documentation-verification matrices;
 
 Capabilities deliberately outside v1 are tracked in [`deferred.md`](deferred.md).

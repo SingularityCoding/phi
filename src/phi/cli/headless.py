@@ -10,13 +10,17 @@ from phi.cli.model_selection import (
     resolve_available_model,
 )
 from phi.harness import EventEmitter, RunEvent, RunResult
-from phi.sessions import create_session, resume_session, select_model, send_message
+from phi.sessions import SessionHandle, create_session, resume_session, select_model, send_message
 
 
 @dataclass(frozen=True)
 class HeadlessOutcome:
-    session_id: str
+    session: SessionHandle
     result: RunResult
+
+    @property
+    def session_id(self) -> str:
+        return self.session.session_id
 
 
 type RuntimeFactory = Callable[[Path], Awaitable[HostRuntime]]
@@ -31,16 +35,24 @@ async def execute_headless_run(
     session_id: str | None,
     selected_model: str | None,
     max_steps: int,
+    session_handle: SessionHandle | None = None,
+    close_runtime: bool = True,
     events: EventEmitter[RunEvent] | None = None,
     report_session: TextReporter | None = None,
     report_diagnostic: TextReporter | None = None,
 ) -> HeadlessOutcome:
-    """Resolve one durable Session and delegate one bounded request to its service."""
+    """Resolve one durable Session and delegate one bounded request to its service.
+
+    A caller that owns a longer Host lifetime may supply the current immutable Session handle and
+    defer runtime closure. The ordinary CLI path owns and closes the runtime for its single Run.
+    """
 
     if not task.strip():
         raise ValueError("TASK must contain non-whitespace text")
     if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps <= 0:
         raise ValueError("max_steps must be a positive integer")
+    if session_id is not None and session_handle is not None:
+        raise ValueError("session_id and session_handle are mutually exclusive")
 
     runtime = await runtime_factory(cwd)
     if not isinstance(runtime, HostRuntime):
@@ -60,9 +72,9 @@ async def execute_headless_run(
         model_config_from_settings(runtime.settings)
         report_new_diagnostics(runtime.resources.diagnostics)
 
-        handle = (
-            await resume_session(runtime.storage, session_id) if session_id is not None else None
-        )
+        handle = session_handle
+        if handle is None and session_id is not None:
+            handle = await resume_session(runtime.storage, session_id)
         if handle is not None:
             report_new_diagnostics(handle.diagnostics)
         explicit_model = (
@@ -99,6 +111,7 @@ async def execute_headless_run(
             lifecycle=runtime.resources.agents,
         )
         report_new_diagnostics(handle.diagnostics)
-        return HeadlessOutcome(handle.session_id, result)
+        return HeadlessOutcome(handle, result)
     finally:
-        await runtime.close()
+        if close_runtime:
+            await runtime.close()

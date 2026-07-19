@@ -57,6 +57,8 @@ capabilities:
   primitives as the parent Agent.
 - **Developer experience** — a headless CLI and interactive TUI backed by the same application
   services rather than separate implementations.
+- **Behavioral evaluation** — a test-only, Scripted-Model-covered runner plus an opt-in live matrix
+  that accepts complete Agent tasks from final Environment and durable state.
 
 The Model gateway, Tool processing boundary, Harness core, Session/Context services, cwd-scoped
 runtime integrations, and Delegation-style Subagents are implemented today. Phi loads root
