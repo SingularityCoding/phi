@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -27,6 +29,10 @@ class McpConfigError(ValueError):
     def __init__(self, diagnostic: McpConfigDiagnostic) -> None:
         self.diagnostic = diagnostic
         super().__init__(str(diagnostic))
+
+
+class McpConfigMutationError(ValueError):
+    """A requested source-local MCP configuration mutation is invalid."""
 
 
 class McpServerConfig(BaseModel):
@@ -58,6 +64,13 @@ class McpConfig(BaseModel):
     )
 
     servers: dict[str, McpServerConfig] = Field(default_factory=dict, alias="mcpServers")
+
+
+@dataclass(frozen=True)
+class ConfiguredMcpServer:
+    server_id: str
+    source: Literal["project", "global"]
+    config: McpServerConfig
 
 
 async def load_mcp_config(path: Path) -> McpConfig:
@@ -102,6 +115,82 @@ async def save_mcp_config(path: Path, config: McpConfig) -> None:
         ) from error
 
 
+async def add_mcp_server(
+    path: Path,
+    server_id: str,
+    command: str,
+    args: tuple[str, ...] = (),
+    *,
+    source: Literal["project", "global"],
+) -> None:
+    """Validate and atomically add one stdio definition to one selected source."""
+
+    _validate_cli_server_id(server_id)
+    current = await load_mcp_config(path)
+    if server_id in current.servers:
+        raise McpConfigMutationError(
+            f"MCP server {server_id!r} already exists in {source} MCP configuration"
+        )
+    updated = McpConfig(
+        mcpServers={
+            **current.servers,
+            server_id: McpServerConfig(command=command, args=args),
+        }
+    )
+    await save_mcp_config(path, updated)
+
+
+async def remove_mcp_server(
+    path: Path,
+    server_id: str,
+    *,
+    source: Literal["project", "global"],
+) -> None:
+    """Atomically remove one definition from exactly one selected source."""
+
+    current = await load_mcp_config(path)
+    if server_id not in current.servers:
+        raise McpConfigMutationError(
+            f"MCP server {server_id!r} does not exist in {source} MCP configuration"
+        )
+    updated = McpConfig(
+        mcpServers={
+            configured_id: config
+            for configured_id, config in current.servers.items()
+            if configured_id != server_id
+        }
+    )
+    await save_mcp_config(path, updated)
+
+
+async def list_configured_mcp_servers(
+    global_path: Path,
+    project_path: Path,
+    *,
+    global_only: bool = False,
+) -> tuple[ConfiguredMcpServer, ...]:
+    """Return global-only or effective project-over-global definitions with provenance."""
+
+    global_config = await load_mcp_config(global_path)
+    if global_only:
+        return tuple(
+            ConfiguredMcpServer(server_id, "global", config)
+            for server_id, config in sorted(global_config.servers.items())
+        )
+    project_config = await load_mcp_config(project_path)
+    effective = {
+        server_id: ConfiguredMcpServer(server_id, "global", config)
+        for server_id, config in global_config.servers.items()
+    }
+    effective.update(
+        {
+            server_id: ConfiguredMcpServer(server_id, "project", config)
+            for server_id, config in project_config.servers.items()
+        }
+    )
+    return tuple(effective[server_id] for server_id in sorted(effective))
+
+
 def _save_mcp_config(path: Path, config: McpConfig) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = (
@@ -139,3 +228,12 @@ def _safe_validation_reason(error: ValidationError) -> str:
     )
     location_summary = ", ".join(locations)
     return f"invalid MCP configuration at {location_summary}"
+
+
+def _validate_cli_server_id(server_id: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", server_id):
+        raise McpConfigMutationError(
+            "MCP server IDs must contain only letters, digits, underscores, or hyphens"
+        )
+    if len(server_id) > 64:
+        raise McpConfigMutationError("MCP server IDs must not exceed 64 characters")

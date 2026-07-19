@@ -257,9 +257,15 @@ async def resume_session(storage: SessionStorage, session_id: str) -> SessionHan
 
 
 async def list_sessions(storage: SessionStorage) -> list[SessionMetadata]:
-    sessions: list[SessionMetadata] = []
+    return [handle.metadata for handle in await list_session_handles(storage)]
+
+
+async def list_session_handles(storage: SessionStorage) -> list[SessionHandle]:
+    """Load and validate every Session without hiding recovery diagnostics."""
+
+    sessions: list[SessionHandle] = []
     for envelope in await storage.list_metadata():
-        sessions.append((await resume_session(storage, envelope.metadata.id)).metadata)
+        sessions.append(await resume_session(storage, envelope.metadata.id))
     return sessions
 
 

@@ -2,12 +2,17 @@
 
 from phi.mcp.client import McpRuntime, connect_mcp_servers
 from phi.mcp.config import (
+    ConfiguredMcpServer,
     McpConfig,
     McpConfigDiagnostic,
     McpConfigError,
+    McpConfigMutationError,
     McpServerConfig,
+    add_mcp_server,
+    list_configured_mcp_servers,
     load_mcp_config,
     load_merged_mcp_config,
+    remove_mcp_server,
     save_mcp_config,
 )
 from phi.mcp.types import (
@@ -24,9 +29,11 @@ from phi.mcp.types import (
 )
 
 __all__ = [
+    "ConfiguredMcpServer",
     "McpConfig",
     "McpConfigDiagnostic",
     "McpConfigError",
+    "McpConfigMutationError",
     "McpDiagnostic",
     "McpEvent",
     "McpPrompt",
@@ -39,8 +46,11 @@ __all__ = [
     "McpServerConfig",
     "McpServerConnected",
     "McpServerConnectFailed",
+    "add_mcp_server",
     "connect_mcp_servers",
+    "list_configured_mcp_servers",
     "load_mcp_config",
     "load_merged_mcp_config",
+    "remove_mcp_server",
     "save_mcp_config",
 ]

@@ -74,10 +74,11 @@ Tool Registry. Delegation is bounded to depth three and four concurrently runnin
 cwd-scoped runtime. Unfinished descendants are cancelled and awaited before an owning Run or
 runtime lifetime ends.
 
-The first Host slice is also available. `phi run` starts one bounded Run in a durable Session,
-loads the cwd-scoped runtime, and supports Session resume, explicit Model selection, a Step budget,
-and live redacted JSONL Events. The rest of the designed headless command surface and the complete
-Textual TUI remain pending.
+The headless Host is also available. `phi run` starts one bounded Run in a durable Session, loads
+the cwd-scoped runtime, and supports Session resume, explicit Model selection, a Step budget, and
+live redacted JSONL Events. Session discovery/resume/Fork commands, complete Context inspection,
+project/global MCP configuration management, and bounded Proxy diagnostics are available from the
+same Typer application. The complete Textual interaction workflow remains pending.
 
 ## Run one task
 
@@ -101,9 +102,30 @@ Tools as ordinary Tool Results. Completed, failed, Step-budget-exhausted, and ca
 with status 0, 1, 2, and 130 respectively. Bare `uv run phi` still launches the minimal Textual
 shell.
 
-Phi also loads stdio MCP servers from `~/.phi/mcp.json` and `.phi/mcp.json`. Project definitions
-replace global definitions with the same server ID, including `"enabled": false` definitions that
-disable a global server for one project:
+The management and diagnostic commands are:
+
+```bash
+uv run phi session list
+uv run phi session resume <session-id>
+uv run phi session fork <session-id> <entry-id> [--model <name>]
+uv run phi context [--session <session-id>] [--json]
+uv run phi mcp add [--global] <name> -- <command> [args...]
+uv run phi mcp list [--global]
+uv run phi mcp remove [--global] <name>
+uv run phi doctor
+```
+
+Session and Context reads fail closed on corrupt data and report crash-recovery diagnostics on
+stderr. `phi context --json` emits one versioned document containing the complete model-visible
+request, character counts, Token Estimate diagnostics, and known input limits; it does not invoke
+the Model. MCP configuration commands atomically edit only the selected source and never start a
+server. `phi doctor` checks trusted Model settings, Proxy model discovery, and default-Model
+availability without creating a Session, starting MCP, or making a Model response request.
+
+Phi loads stdio MCP servers from `~/.phi/mcp.json` and `.phi/mcp.json`; the files may be managed with
+the `phi mcp` commands above or edited directly. Project definitions replace global definitions
+with the same server ID, including `"enabled": false` definitions that disable a global server for
+one project:
 
 ```json
 {
@@ -140,8 +162,9 @@ canonically resolves paths, confines them to an explicit workspace root, and den
 metadata and dotenv paths by default. `bash` is deliberately different: it starts in the workspace
 and is governed by approval and timeout, but it is unconfined and is not an operating-system
 sandbox. File Confinement is an in-process structural check, not protection against every
-filesystem race. `phi run` exposes the Model, Harness, Session, Context, and cwd runtime services
-through the persistent headless Host; the complete Textual interaction workflow is still pending.
+filesystem race. The Typer commands expose the Model, Harness, Session, Context, MCP configuration,
+and cwd runtime services through the headless Host; the complete Textual interaction workflow is
+still pending.
 
 ## Design principles
 

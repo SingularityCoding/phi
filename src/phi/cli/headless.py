@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from phi.bootstrap import HostRuntime, model_config_from_settings
+from phi.cli.model_selection import (
+    require_explicit_model_id,
+    resolve_available_model,
+)
 from phi.harness import EventEmitter, RunEvent, RunResult
 from phi.sessions import create_session, resume_session, select_model, send_message
-
-
-class ModelResolutionError(ValueError):
-    """The requested effective Model cannot be selected from the available catalog."""
 
 
 @dataclass(frozen=True)
@@ -58,8 +58,6 @@ async def execute_headless_run(
                     report_diagnostic(text)
 
         model_config_from_settings(runtime.settings)
-        if selected_model is not None and not selected_model.strip():
-            raise ModelResolutionError("--model must contain non-whitespace text")
         report_new_diagnostics(runtime.resources.diagnostics)
 
         handle = (
@@ -67,18 +65,17 @@ async def execute_headless_run(
         )
         if handle is not None:
             report_new_diagnostics(handle.diagnostics)
-        explicit_model = _optional_text(selected_model)
-        resumed_model = None if handle is None else _optional_text(handle.metadata.model)
-        default_model = _optional_text(runtime.settings.default_model)
-        effective_model = explicit_model or resumed_model or default_model
-        if effective_model is None:
-            raise ModelResolutionError(
-                "no Model was selected; configure PHI_DEFAULT_MODEL or pass --model"
-            )
-        model_catalog = {info.id: info for info in runtime.available_models}
-        model_info = model_catalog.get(effective_model)
-        if model_info is None:
-            raise ModelResolutionError(f"Model {effective_model!r} is not available")
+        explicit_model = (
+            None if selected_model is None else require_explicit_model_id(selected_model)
+        )
+        resumed_model = None if handle is None else handle.metadata.model
+        effective_model, model_info = resolve_available_model(
+            explicit_model,
+            resumed_model,
+            runtime.settings.default_model,
+            available_models=runtime.available_models,
+            missing_message=("no Model was selected; configure PHI_DEFAULT_MODEL or pass --model"),
+        )
 
         if handle is None:
             handle = await create_session(runtime.storage, model=effective_model)
@@ -105,10 +102,3 @@ async def execute_headless_run(
         return HeadlessOutcome(handle.session_id, result)
     finally:
         await runtime.close()
-
-
-def _optional_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    stripped = value.strip()
-    return stripped or None

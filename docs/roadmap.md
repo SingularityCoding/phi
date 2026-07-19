@@ -41,10 +41,13 @@ Implemented today:
 - persistent `phi run` headless execution with durable Session create/resume, Model selection and
   implicit Forks, bounded Steps, redacted JSONL Events, fail-closed non-interactive approval,
   documented exit statuses, and complete cwd-runtime cleanup;
+- remaining v1 headless commands for validated Session list/resume/exact Fork, complete Context
+  inspection, atomic project/global MCP configuration management, and bounded Model settings/Proxy
+  diagnostics;
 - Ruff, ty, pytest, coverage, and pre-commit infrastructure;
 - smoke tests for CLI and TUI startup.
 
-The next Hosts boundary is the remaining headless command surface and complete Textual TUI.
+The next Hosts boundary is the complete Textual TUI.
 
 ## v1 capability scope
 
@@ -60,8 +63,8 @@ The next Hosts boundary is the remaining headless command surface and complete T
 | Project instructions and Agent Skills | Complete | Implemented |
 | stdio MCP tools, resources, prompts, configuration | Complete | Implemented |
 | Delegation-style multi-agent tools | Complete | Implemented |
-| Headless CLI and complete Textual TUI | Complete | Partial: persistent `phi run` implemented; remaining commands and complete TUI pending |
-| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, stdio MCP, Delegation, and `phi run` coverage implemented |
+| Headless CLI and complete Textual TUI | Complete | Partial: complete headless CLI implemented; complete TUI pending |
+| Offline tests, opt-in contracts, behavioral evals | Partial | Model, Environment, Tool, Harness, Session, Context, Project Instructions, Skills, stdio MCP, Delegation, and complete headless CLI coverage implemented |
 
 ## Implementation sequence
 
@@ -102,10 +105,8 @@ placeholders.
 
 These decisions may be made when the relevant capability lands:
 
-- the exact checks and output format of `phi doctor`;
 - how the default `ConfinedEnvironment.root` is selected and overridden;
 - final small-file placement for support values such as directory and execution result types;
 - the detailed contract-test and behavioral-evaluation matrix;
-- CLI flag spelling where the operation itself is already specified.
 
 Capabilities deliberately outside v1 are tracked in [`deferred.md`](deferred.md).

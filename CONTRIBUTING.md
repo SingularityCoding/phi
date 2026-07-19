@@ -37,14 +37,25 @@ Run one persistent headless task with the configured Model:
 uv run phi run "summarize this repository"
 ```
 
+Inspect the complete command surface and run bounded diagnostics with:
+
+```bash
+uv run phi --help
+uv run phi doctor
+```
+
+The CLI also exposes `session list/resume/fork`, complete `context` inspection, and project/global
+`mcp add/list/remove` operations. Use each command's `--help` output for its current arguments and
+options.
+
 The bare command continues to launch the minimal Textual shell:
 
 ```bash
 uv run phi
 ```
 
-Other commands documented only in system-design documents are unavailable until their code and
-tests land.
+Commands documented only in system-design documents beyond this implemented surface remain
+unavailable until their code and tests land.
 
 ## Required validation
 

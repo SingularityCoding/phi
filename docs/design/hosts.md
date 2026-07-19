@@ -1,7 +1,7 @@
 # CLI and TUI Hosts Design
 
-> **Status:** Design complete; persistent `phi run` and the minimal Textual shell are implemented.
-> The remaining CLI commands and complete TUI are pending.
+> **Status:** Design complete; the CLI command surface and minimal Textual shell are implemented.
+> The complete TUI is pending.
 
 ## Host boundary
 
@@ -24,7 +24,7 @@ phi session list
 phi session resume <id>
 phi session fork <id> <entry_id> [--model <name>]
 phi context [--session <id>] [--json]
-phi mcp add <name> -- <command> [args...] [--global]
+phi mcp add [--global] <name> -- <command> [args...]
 phi mcp list [--global]
 phi mcp remove <name> [--global]
 phi doctor
@@ -38,8 +38,8 @@ phi doctor
 - `session resume` launches the TUI on the chosen Session.
 - CLI `session fork` creates a branch and exits; interactive fork continues inside the TUI.
 - `context` calls the same Context builder used before a model request and performs no model call.
-- `doctor` validates configuration and Proxy connectivity; its exact checks remain an implementation
-  detail.
+- `doctor` validates trusted Model Settings and credentials, Proxy model discovery, and configured
+  default-Model availability in dependency order without building an Agent runtime.
 
 Exit codes for `phi run`:
 
