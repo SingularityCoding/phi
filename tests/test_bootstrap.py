@@ -287,6 +287,24 @@ async def test_cwd_assembly_orders_stable_sections_and_exposes_only_model_skills
         "- `zeta`: Zeta workflow.\n"
         "--- END MODEL-INVOKABLE SKILLS ---"
     )
+    assert [section.origin for section in resources.instruction_sections] == [
+        "Phi base",
+        "Personal",
+        "Project",
+        "Model-invocable Skills",
+    ]
+    assert [section.content for section in resources.instruction_sections] == [
+        "Phi base.\n",
+        "Personal rules.\n",
+        "Project rules.\n",
+        (
+            "Load a Skill by calling `skill_tool` with its exact name.\n"
+            "- `alpha`: Alpha workflow.\n"
+            "- `zeta`: Zeta workflow."
+        ),
+    ]
+    assert resources.instruction_sections[0].source == "Phi built-in instructions"
+    assert resources.instruction_sections[2].source == str(cwd / "AGENTS.md")
     assert tuple(resources.skill_discovery.skills) == ("zeta", "alpha", "user-only")
     skill_spec = next(
         spec for spec in resources.tools.specs() if spec["function"]["name"] == "skill_tool"
@@ -408,7 +426,7 @@ async def test_compaction_rebuild_keeps_the_exact_assembled_stable_context(
         settings=Settings(),
         model_info=None,
         tools=resources.tools,
-        stable_instructions=resources.stable_instructions,
+        instructions=resources.instruction_assembly,
     )
 
     compacted = await manual_compact(
@@ -426,13 +444,22 @@ async def test_compaction_rebuild_keeps_the_exact_assembled_stable_context(
         settings=Settings(),
         model_info=None,
         tools=resources.tools,
-        stable_instructions=resources.stable_instructions,
+        instructions=resources.instruction_assembly,
     )
 
     assert before.context.system_prompt == resources.stable_instructions
     assert after.context.system_prompt == before.context.system_prompt
     assert after.context.tools == before.context.tools
     assert after.context.dropped_summary == "Earlier summary."
+    assert after.dropped_summary is not None
+    assert after.dropped_summary.provenance == "Compaction"
+    assert after.dropped_summary.inclusion == "Generated · included"
+    assert after.dropped_summary.content == "Earlier summary."
+    assert after.projection.session_path_entries > after.projection.conversation_view_entries
+    assert after.request.messages[1] == {
+        "role": "system",
+        "content": "Dropped conversation history summary:\nEarlier summary.",
+    }
 
 
 async def test_project_skill_discovery_honors_repository_root_ignore_rules(

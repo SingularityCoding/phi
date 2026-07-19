@@ -13,7 +13,6 @@ from uuid import uuid4
 from phi.harness import (
     AtomicConversationUnit,
     ContextCapacityError,
-    ContextInspection,
     EventBus,
     EventEmitter,
     EventListener,
@@ -37,6 +36,7 @@ from phi.harness import (
 )
 from phi.harness.compaction import estimate_prompt_tokens, estimate_request_tokens
 from phi.harness.context import Context, build_context
+from phi.instructions import InstructionAssembly
 from phi.model import (
     Model,
     ModelContextLimitError,
@@ -59,6 +59,13 @@ from phi.sessions.errors import (
     InvalidSessionLeafError,
     MissingEntryParentError,
     SessionLineageCycleError,
+)
+from phi.sessions.inspection import (
+    ContextInspection,
+    InspectedMessage,
+    InspectedSummary,
+    InspectedTool,
+    ProjectionCounts,
 )
 from phi.sessions.metadata import SessionMetadata
 from phi.sessions.storage import LoadedSession, SessionStorage
@@ -405,14 +412,14 @@ async def materialize_conversation(
     storage: SessionStorage,
     handle: SessionHandle,
 ) -> ConversationView:
-    state = await storage.load_state(handle.session_id)
-    path = await _materialize_path(
-        storage,
-        state,
-        handle.leaf_id,
-        seen_sessions=set(),
-    )
-    _validate_path(path, handle.session_id)
+    presentation = await materialize_presentation(storage, handle)
+    return _conversation_view_from_path(handle, presentation.entries)
+
+
+def _conversation_view_from_path(
+    handle: SessionHandle,
+    path: tuple[Entry, ...],
+) -> ConversationView:
     dropped_summary: str | None = None
     visible: tuple[Entry, ...] = path
     compaction_indexes = [
@@ -474,10 +481,11 @@ async def inspect_context(
     settings: Settings,
     model_info: ModelInfo | None,
     tools: ToolRegistry,
-    stable_instructions: str,
+    instructions: InstructionAssembly,
 ) -> ContextInspection:
-    view = await materialize_conversation(storage, handle)
-    context = _context_for_view(view, tools, stable_instructions)
+    presentation = await materialize_presentation(storage, handle)
+    view = _conversation_view_from_path(handle, presentation.entries)
+    context = _context_for_view(view, tools, instructions.stable_instructions)
     selected_model = view.model or settings.default_model or None
     request = context.to_request(model=selected_model)
     estimate = estimate_prompt_tokens(
@@ -492,14 +500,96 @@ async def inspect_context(
         diagnostics = ("Model input limit is unknown; proactive Context budgeting is best-effort",)
     else:
         safe_limit = safe_prompt_limit(effective_limit, settings.compaction)
+    inspected_tools = tuple(_inspect_tool(schema) for schema in context.tools)
+    inspected_messages = tuple(
+        _inspect_message(index, message) for index, message in enumerate(context.messages, start=1)
+    )
+    inspected_summary = (
+        InspectedSummary(context.dropped_summary, len(context.dropped_summary))
+        if context.dropped_summary is not None
+        else None
+    )
     return ContextInspection(
         context=context,
         request=request,
+        model_id=selected_model,
+        projection=ProjectionCounts(
+            session_path_entries=len(presentation.entries),
+            conversation_view_entries=len(view.entries),
+            context_messages=len(context.messages),
+            request_messages=len(request.messages),
+        ),
+        instructions=instructions.sections,
+        tools=inspected_tools,
+        messages=inspected_messages,
+        dropped_summary=inspected_summary,
         estimate=estimate,
+        provider_anchor_prompt_tokens=(
+            handle.prompt_budget_anchor.prompt_tokens
+            if estimate.used_provider_anchor and handle.prompt_budget_anchor is not None
+            else None
+        ),
         effective_input_limit=effective_limit,
         safe_prompt_limit=safe_limit,
         diagnostics=diagnostics,
     )
+
+
+def _inspect_tool(schema: Mapping[str, Any]) -> InspectedTool:
+    function = schema.get("function")
+    function = function if isinstance(function, Mapping) else {}
+    name = function.get("name")
+    description = function.get("description")
+    return InspectedTool(
+        name=name if isinstance(name, str) else "Unnamed Tool",
+        description=description if isinstance(description, str) else "",
+        schema=schema,
+        characters=_json_characters(schema),
+    )
+
+
+def _inspect_message(index: int, message: Mapping[str, Any]) -> InspectedMessage:
+    role = message.get("role")
+    if role == "tool":
+        label = f"Tool Result {index}"
+    elif role == "assistant" and message.get("tool_calls"):
+        label = f"Assistant Tool Calls {index}"
+    elif role == "assistant":
+        label = f"Assistant message {index}"
+    elif role == "user":
+        label = f"User message {index}"
+    else:
+        label = f"{str(role or 'Unknown').title()} message {index}"
+    return InspectedMessage(
+        index=index,
+        label=label,
+        readable_content=_readable_message_content(message),
+        message=message,
+        characters=_json_characters(message),
+    )
+
+
+def _readable_message_content(message: Mapping[str, Any]) -> str:
+    content = message.get("content")
+    parts = [content] if isinstance(content, str) and content else []
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for call in tool_calls:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function")
+            if not isinstance(function, Mapping):
+                continue
+            name = function.get("name")
+            arguments = function.get("arguments")
+            parts.append(f"Tool Call: {name or 'unnamed'}\nArguments: {arguments or '{}'}")
+    if parts:
+        return "\n\n".join(parts)
+    return "(no text content)"
+
+
+def _json_characters(value: Mapping[str, Any]) -> int:
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
 async def manual_compact(
@@ -607,13 +697,14 @@ async def _continue_send(
     lifecycle_context: object | None,
 ) -> tuple[SessionHandle, RunResult]:
     handle = active.handle
+    inspection_instructions = InstructionAssembly.from_prompt(stable_instructions)
     inspection = await inspect_context(
         storage,
         handle,
         settings=settings,
         model_info=model_info,
         tools=tools,
-        stable_instructions=stable_instructions,
+        instructions=inspection_instructions,
     )
     request = inspection.context.to_request(model=selected_model)
     compacted = False
@@ -661,7 +752,7 @@ async def _continue_send(
                 settings=settings,
                 model_info=model_info,
                 tools=tools,
-                stable_instructions=stable_instructions,
+                instructions=inspection_instructions,
             )
             request = inspection.context.to_request(model=selected_model)
             rebuilt = estimate_prompt_tokens(
@@ -725,7 +816,7 @@ async def _continue_send(
             settings=settings,
             model_info=model_info,
             tools=tools,
-            stable_instructions=stable_instructions,
+            instructions=inspection_instructions,
         )
         retry_request = retry_inspection.context.to_request(model=selected_model)
         retry_invocation = replace(invocation, run_id=str(uuid4()))

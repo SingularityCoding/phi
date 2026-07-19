@@ -67,7 +67,13 @@ The presentation widget named `TranscriptView` dispatches Entry and Event types 
 - `ToolCallView`, shown as a spinner during execution and updated in place on completion;
 - `CompactionEntryView` as a structural summary marker.
 
-The status bar shows model, Session name/ID, cwd, and idle/running state.
+The status bar shows model, Session name/ID, cwd, idle/running state, and a live estimated Context
+capacity signal. The signal uses the shared Context inspection result: `~` marks the Token Estimate,
+the percentage is relative to the effective input limit, and the safe prompt limit is shown
+separately. While a Run is active it reads `updating`; after a Run or Session-changing command it is
+rebuilt from the current immutable handle. If the effective limit is unknown, the Host shows the
+estimated token count and `limit unknown` without inventing a percentage. Less essential status
+fields are omitted as terminal width narrows, and the one-line bar truncates safely.
 
 ## Streaming
 
@@ -136,15 +142,25 @@ capability.
 
 ## Context inspector
 
-`/context` opens a modal containing:
+`/context` opens a full-screen, read-only request explorer over one immutable inspection snapshot.
+It does not call the Model, append Entries, compact Context, or change the selected leaf. The
+explorer has exactly three views:
 
-- complete system prompt;
-- every registered Tool name, description, and full JSON Schema;
-- every selected message, including Tool Calls and Tool Results;
-- dropped-history summary when present;
-- character counts and any available aggregate real token usage.
+- **Overview** is the default and teaches the projection `Session path → Conversation View →
+  Context → normalized Model request`. It shows meaningful counts at each boundary, the selected
+  model, major input sources, estimate provenance, effective input limit, and safe prompt limit.
+- **Contents** presents a navigable hierarchy of trusted instruction origins, complete registered
+  Tool definitions, selected messages, and the generated dropped-history summary. Tool Calls and
+  Tool Results use semantic labels; selecting an item shows complete Model-visible content or JSON
+  Schema plus source, inclusion state, and character count.
+- **Raw request** renders the exact frozen normalized `ModelRequest` snapshot, including messages,
+  tools, model, temperature, and maximum output tokens.
 
-Sections are collapsible. Phi does not invent exact per-section token counts.
+Instruction origin labels come from bootstrap assembly metadata rather than parsing prompt
+delimiters. The explorer uses direct view keys, Tree arrow navigation, and Escape to close. On narrow
+terminals the Contents tree and detail pane stack vertically and remain scrollable. Phi does not
+invent exact per-section token counts and does not present cumulative provider Usage as current
+Context size.
 
 ## Interactive approval
 
@@ -178,7 +194,8 @@ model implicitly forks rather than changing the model mid-branch.
 - FIFO Queue processing after every terminal status, including `CANCELLED`;
 - Steer injection, queued-message editing/removal, and Escape independence;
 - slash-command routing and dynamic Skill/MCP commands;
-- Context inspector completeness;
+- Context status honesty and refresh behavior, plus Context explorer completeness, keyboard
+  navigation, immutability, and narrow-terminal layout;
 - approval modal worker behavior and session allowance;
 - model selection and implicit fork behavior;
 - cancellation cleanup of Models, MCP transports, and child agents.

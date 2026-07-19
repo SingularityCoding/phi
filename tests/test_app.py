@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import SecretStr
-from textual.widgets import Collapsible, LoadingIndicator, Markdown, Static, TextArea
+from textual.widgets import (
+    Collapsible,
+    LoadingIndicator,
+    Markdown,
+    Static,
+    TabbedContent,
+    TextArea,
+    Tree,
+)
 
 from phi.bootstrap import HostRuntime, build_runtime_resources
 from phi.instructions import PHI_BASE_INSTRUCTIONS
@@ -212,6 +221,86 @@ async def test_app_creates_session_and_sends_prompt_through_shared_service(
     assert factory.close_count == 1
 
 
+async def test_context_status_tracks_known_capacity_and_active_run(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = GatedModel([ModelResponse(content="capacity changed")])
+    factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        initial = str(app.query_one("#status-bar").render())
+        assert "Context ~" in initial
+        assert "/100000" in initial
+        assert "%" in initial
+        assert "safe 83616" in initial
+
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.load_text("grow the Context")
+        await pilot.press("enter")
+        await model.started.wait()
+        assert "Context updating" in str(app.query_one("#status-bar").render())
+
+        model.release.set()
+        await app.workers.wait_for_complete()
+        refreshed = str(app.query_one("#status-bar").render())
+        assert "Context updating" not in refreshed
+        assert "Last Run completed" in refreshed
+        assert refreshed != initial
+        grown_match = re.search(r"Context ~(\d+)", refreshed)
+        assert grown_match is not None
+        grown_tokens = int(grown_match.group(1))
+
+        prompt.load_text("/new")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        reset = str(app.query_one("#status-bar").render())
+        reset_match = re.search(r"Context ~(\d+)", reset)
+        assert reset_match is not None
+        assert int(reset_match.group(1)) < grown_tokens
+
+
+async def test_context_status_and_explorer_are_honest_when_capacity_is_unknown(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    factory = TuiRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        ScriptedModel([]),
+        available_models=(ModelInfo("model-a"),),
+    )
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test(size=(56, 24)) as pilot:
+        await pilot.pause()
+        status = str(app.query_one("#status-bar").render())
+        assert "Ctx ~" in status
+        assert "limit unknown" in status
+        assert "%" not in status
+
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.load_text("/context")
+        await pilot.press("enter")
+        await pilot.pause()
+        overview = str(app.screen.query_one("#context-overview-content").render())
+        assert "Effective input limit: unknown" in overview
+        assert "Safe prompt limit: unknown" in overview
+        assert "Utilization: unavailable" in overview
+        assert "%" not in overview
+
+        await pilot.press("2")
+        await pilot.pause()
+        tree = app.screen.query_one("#context-contents-tree", Tree)
+        detail = app.screen.query_one("#context-detail-scroll")
+        assert tree.region.y < detail.region.y
+        assert tree.region.width == detail.region.width
+        assert "You are Phi" in str(app.screen.query_one("#context-content-detail").render())
+        await pilot.press("escape")
+
+
 async def test_session_commands_replace_the_current_immutable_handle(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -287,7 +376,7 @@ async def test_follow_up_messages_are_visible_and_run_in_fifo_order(tmp_path: Pa
         ]
 
 
-async def test_context_command_opens_complete_inspector_without_model_call(
+async def test_context_command_opens_educational_request_explorer_without_mutation(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -295,9 +384,12 @@ async def test_context_command_opens_complete_inspector_without_model_call(
     model = ScriptedModel(
         [
             ModelResponse(
+                tool_calls=[ToolCall("call-1", "missing-tool", {"value": 1})],
+            ),
+            ModelResponse(
                 content="answer",
                 usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
-            )
+            ),
         ]
     )
     factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
@@ -309,17 +401,76 @@ async def test_context_command_opens_complete_inspector_without_model_call(
         prompt.load_text("question")
         await pilot.press("enter")
         await app.workers.wait_for_complete()
-        assert len(model.requests) == 1
+        assert len(model.requests) == 2
+        assert app.current_session is not None
+        revision = app.current_session.revision
+        leaf_id = app.current_session.leaf_id
 
         prompt.load_text("/context")
         await pilot.press("enter")
         await pilot.pause()
-        assert "PHI BASE INSTRUCTIONS" in str(app.screen.query_one("#context-system").render())
-        assert '"name": "read"' in str(app.screen.query_one("#context-tools").render())
-        assert '"content": "question"' in str(app.screen.query_one("#context-messages").render())
-        assert "Token Estimate" in str(app.screen.query_one("#context-budget").render())
-        assert "'total_tokens': 12" in str(app.screen.query_one("#context-budget").render())
-        assert len(model.requests) == 1
+        views = app.screen.query_one("#context-views", TabbedContent)
+        assert views.active == "context-overview"
+        overview = str(app.screen.query_one("#context-overview-content").render())
+        assert "Model: model-a" in overview
+        assert "Session path: 4 Entries" in overview
+        assert "Conversation View: 4 Entries" in overview
+        assert "Context: 4 selected messages" in overview
+        assert "Model request: 5 messages" in overview
+        assert "Final Token Estimate: ~" in overview
+        assert "Latest applicable prompt Usage anchor: 10 tokens" in overview
+        assert "Effective input limit: 100000 tokens" in overview
+        assert "Safe prompt limit: 83616 tokens" in overview
+        assert "Aggregate provider Usage" not in overview
+
+        await pilot.press("3")
+        await pilot.pause()
+        assert views.active == "context-raw"
+        raw = str(app.screen.query_one("#context-raw-request").render())
+        assert '"model": "model-a"' in raw
+        assert '"role": "system"' in raw
+        assert '"content": "question"' in raw
+        assert '"name": "missing-tool"' in raw
+        assert "unknown_tool: missing-tool" in raw
+
+        await pilot.press("2")
+        await pilot.pause()
+        assert views.active == "context-contents"
+        detail = str(app.screen.query_one("#context-content-detail").render())
+        assert "Phi base" in detail
+        assert "Stable · included" in detail
+        assert "You are Phi" in detail
+
+        await pilot.press("down", "down")
+        detail = str(app.screen.query_one("#context-content-detail").render())
+        assert "Tool Registry" in detail
+        assert "Registered · included" in detail
+        assert '"name": "bash"' in detail
+
+        await pilot.press("shift+left", "shift+down", "down", "down")
+        detail = str(app.screen.query_one("#context-content-detail").render())
+        assert "Assistant Tool Calls" in detail
+        assert "Readable content" in detail
+        assert "Tool Call: missing-tool" in detail
+        assert '"arguments": "{\\"value\\":1}"' in detail
+        await pilot.press("down")
+        detail = str(app.screen.query_one("#context-content-detail").render())
+        assert "Tool Result" in detail
+        assert "unknown_tool: missing-tool" in detail
+        await pilot.press("down")
+        detail = str(app.screen.query_one("#context-content-detail").render())
+        assert "Assistant message" in detail
+        assert "answer" in detail
+
+        await pilot.press("1")
+        await pilot.pause()
+        assert views.active == "context-overview"
+        await pilot.press("2", "3")
+        await pilot.pause()
+        assert views.active == "context-raw"
+        assert len(model.requests) == 2
+        assert app.current_session.revision == revision
+        assert app.current_session.leaf_id == leaf_id
 
         await pilot.press("escape")
         await app.workers.wait_for_complete()
@@ -726,6 +877,33 @@ async def test_manual_compaction_routes_focus_and_renders_structural_marker(
             app.current_session,
         )
         assert compacted.dropped_summary == "Earlier decisions were summarized."
+
+        request_count = len(model.requests)
+        prompt.load_text("/context")
+        await pilot.press("enter")
+        await pilot.pause()
+        overview = str(app.screen.query_one("#context-overview-content").render())
+        assert "Generated dropped-history summary: included" in overview
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press(
+            "shift+left",
+            "shift+down",
+            "shift+down",
+            "shift+down",
+            "down",
+        )
+        detail = str(app.screen.query_one("#context-content-detail").render())
+        assert "Generated dropped-history summary" in detail
+        assert "Generated · included" in detail
+        assert "Earlier decisions were summarized." in detail
+        await pilot.press("3")
+        await pilot.pause()
+        raw = str(app.screen.query_one("#context-raw-request").render())
+        assert "Dropped conversation history summary" in raw
+        assert "Earlier decisions were summarized." in raw
+        assert len(model.requests) == request_count
+        await pilot.press("escape")
 
 
 async def test_disabled_manual_compaction_is_reported_explicitly(tmp_path: Path) -> None:

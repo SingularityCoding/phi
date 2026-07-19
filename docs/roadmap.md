@@ -16,7 +16,8 @@ Implemented today:
 - environment-backed settings for the LiteLLM Proxy;
 - Typer entry point with bare invocation;
 - complete Textual Host with durable transcript rendering, streaming, Queue/Steer interaction,
-  interactive approval, slash commands, and Context inspection;
+  interactive approval, slash commands, a live estimated Context-capacity status signal, and a
+  full-screen educational request explorer;
 - stateless OpenAI-compatible Model gateway with HTTP and SSE normalization;
 - standalone response assembly, typed Model failures, and model discovery;
 - deterministic Scripted Model plus offline protocol tests and opt-in live contracts;
@@ -28,8 +29,9 @@ Implemented today:
   sequential Tool round trips, failure policy, and cancellation propagation;
 - versioned durable Session entry journals with crash-aware commits, resume, exact forks, branch
   navigation, model selection, isolated Subagent lineage, and separate redacted Event Traces;
-- immutable Context construction and inspection, deterministic request estimates, provider Usage
-  anchors, manual/threshold/overflow compaction, and bounded context-limit retry;
+- immutable Context construction and inspection with trusted input provenance and projection
+  metadata, deterministic request estimates, provider Usage anchors, manual/threshold/overflow
+  compaction, and bounded context-limit retry;
 - cwd-scoped root Project Instructions, validated global/project Agent Skill discovery, deterministic
   stable-instruction assembly, trusted user activation, and read-only Model activation through the
   common Tool Registry and Dispatcher;

@@ -1,7 +1,6 @@
 # Sessions and Context Design
 
-> **Status:** Design and core application-service implementation complete; Host integration is a
-> later roadmap stage.
+> **Status:** Implemented, including shared inspection services and Host integration.
 
 ## Concepts
 
@@ -164,10 +163,19 @@ class Context:
 - `messages` contains the selected budgeted conversation in wire form.
 - `dropped_summary` explains omitted history when applicable.
 
-The Context inspector renders complete content and character counts. Phi does not claim exact
+The shared Context inspection service materializes one Session path snapshot, derives its
+Conversation View, builds the finite Context, and freezes the exact normalized Model request. Its
+presentation metadata includes projection counts, trusted instruction origins, complete Tool
+schemas, semantically labelled messages, dropped-summary provenance, character counts, estimate
+provenance, and the effective and safe input limits. This is read-only application behavior: it
+does not call the Model, append Entries, change the selected leaf, or trigger compaction.
+
+Bootstrap retains instruction sections in an immutable assembly whose rendered form is the stable
+prompt; execution and inspection therefore consume the same structural source of truth. Inspection
+must not reverse-engineer provenance by parsing prose delimiters. Phi does not claim exact
 per-section token counts without a tokenizer that matches the selected model. A provider-reported
-Usage total may be shown as aggregate information, while a local approximation must be labelled as
-an estimate rather than Usage.
+`Usage.prompt_tokens` value may anchor the current estimate only under the structural-prefix rules
+below; cumulative Usage and `Usage.total_tokens` are not representations of current Context size.
 
 ## Project instructions
 
@@ -185,8 +193,9 @@ concatenated because prose has no natural key for last-write-wins replacement.
 The system prompt order is:
 
 1. Phi base instructions;
-2. project instructions;
-3. the Model-invocable Skill menu.
+2. personal instructions, when configured;
+3. project instructions;
+4. the Model-invocable Skill menu.
 
 Instructions are reloaded or re-injected as stable prompt input and are never summarized by
 compaction.

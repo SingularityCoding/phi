@@ -79,10 +79,11 @@ runtime lifetime ends.
 Both Hosts are available. Bare `phi` opens the complete Textual workflow over one cwd-scoped
 runtime and durable Session, with streaming transcript updates, Queue/Steer follow-ups, interactive
 approval, Session-tree navigation, Model and permission selection, manual Compaction, dynamic Skill
-and MCP Prompt commands, and exact Context inspection. `phi run` provides the same bounded Run and
-Session services headlessly with live redacted JSONL Events. Session discovery/resume/Fork commands,
-Context inspection, project/global MCP configuration management, and bounded Proxy diagnostics are
-available from the same Typer application.
+and MCP Prompt commands, a live estimated Context-capacity signal, and a full-screen request
+explorer with Overview, Contents, and exact Raw request views. `phi run` provides the same bounded
+Run and Session services headlessly with live redacted JSONL Events. Session
+discovery/resume/Fork commands, Context inspection, project/global MCP configuration management,
+and bounded Proxy diagnostics are available from the same Typer application.
 
 ## Run one task
 
@@ -165,7 +166,9 @@ owns all MCP client sessions and subprocesses.
 Phi persists versioned conversation trees with crash-aware commits, exact forks, branch navigation,
 and separate redacted Event Traces. Context construction is immutable and inspectable, uses
 deterministic request estimates plus runtime provider-Usage anchors, and supports manual, threshold,
-and bounded overflow compaction without deleting history. The public Harness operation runs every
+and bounded overflow compaction without deleting history. Inspection preserves trusted instruction
+origins, shows the Session-to-request projection, and never treats cumulative Usage as current
+Context size. The public Harness operation runs every
 ordinary Step through the streaming Model protocol, processes complete Tool Calls sequentially,
 emits ordered lifecycle Events, applies behavioral Hooks, and returns a bounded immutable Run
 Result.

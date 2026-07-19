@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any
 
-from phi.harness.compaction import PromptEstimate
 from phi.harness.snapshots import freeze_request
 from phi.model import ModelRequest
 
@@ -62,25 +59,6 @@ class Context:
             "messages": len(json.dumps(self.messages, ensure_ascii=False, separators=(",", ":"))),
             "tools": len(json.dumps(self.tools, ensure_ascii=False, separators=(",", ":"))),
         }
-
-
-@dataclass(frozen=True)
-class ContextInspection:
-    """Complete inspectable projection and budget diagnostics for one Context."""
-
-    context: Context
-    request: ModelRequest
-    estimate: PromptEstimate
-    effective_input_limit: int | None
-    safe_prompt_limit: int | None
-    diagnostics: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "request", freeze_request(self.request))
-
-    @property
-    def character_counts(self) -> Mapping[str, int]:
-        return MappingProxyType(self.context.character_counts)
 
 
 def build_context(

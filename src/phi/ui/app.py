@@ -20,7 +20,6 @@ from phi.harness import (
     ModelCallStarted,
     RunEvent,
     RunFinished,
-    RunResult,
     RunStarted,
     RunStatus,
     ToolCallCompleted,
@@ -31,6 +30,7 @@ from phi.model import ContentDelta, ModelInfo, ReasoningDelta, ToolCall, ToolCal
 from phi.sessions import (
     AssistantMessageEntry,
     CompactionEntry,
+    ContextInspection,
     SessionHandle,
     ToolResultEntry,
     UserMessageEntry,
@@ -121,7 +121,13 @@ class PhiApp(App[None]):
     .queued-message { width: 1fr; height: auto; }
     .queue-row Button { width: auto; min-width: 8; margin: 0 0 0 1; }
     #prompt { height: 5; border: round $accent; }
-    #status-bar { height: 1; padding: 0 1; background: $panel; }
+    #status-bar {
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
     """
 
     BINDINGS = [
@@ -160,7 +166,7 @@ class PhiApp(App[None]):
         self._reasoning_views: dict[tuple[str, int], ReasoningView] = {}
         self._tool_views: dict[str, ToolCallView] = {}
         self._mcp_prompts: dict[str, McpPrompt] = {}
-        self._provider_usage: dict[str, int] = {}
+        self._context_inspection: ContextInspection | None = None
 
     def compose(self) -> ComposeResult:
         yield TranscriptView(id="transcript")
@@ -194,6 +200,7 @@ class PhiApp(App[None]):
             await self._render_current_conversation()
             self._report_diagnostics(runtime.resources.diagnostics)
             self._report_diagnostics(self.current_session.diagnostics)
+            await self._refresh_context_inspection()
             self._update_status()
             self.query_one("#prompt", PromptInput).focus()
         except Exception as error:
@@ -429,23 +436,11 @@ class PhiApp(App[None]):
             elif command == "/context":
                 if arguments:
                     raise ValueError("usage: /context")
-                _, model_info = self._selected_model(runtime, handle)
-                inspection = await inspect_context(
-                    runtime.storage,
-                    handle,
-                    settings=runtime.settings,
-                    model_info=model_info,
-                    tools=runtime.resources.tools,
-                    stable_instructions=runtime.resources.stable_instructions,
-                )
+                await self._refresh_context_inspection()
+                inspection = self._context_inspection
+                assert inspection is not None
                 self._report_diagnostics(inspection.diagnostics)
-                await self.push_screen_wait(
-                    ContextInspectorScreen(
-                        inspection,
-                        handle,
-                        provider_usage=self._provider_usage or None,
-                    )
-                )
+                await self.push_screen_wait(ContextInspectorScreen(inspection))
                 return
             elif command == "/mcp":
                 if arguments:
@@ -536,6 +531,7 @@ class PhiApp(App[None]):
             assert self.current_session is not None
             self._report_diagnostics(self.current_session.diagnostics)
             await self._render_current_conversation()
+            await self._refresh_context_inspection()
             self._update_status()
         except Exception as error:
             self._show_error(str(error))
@@ -701,7 +697,6 @@ class PhiApp(App[None]):
             if self._shutting_down:
                 return
             self._last_run_status = result.status
-            self._record_provider_usage(result)
             self._report_diagnostics(updated.diagnostics)
             self._show_run_status(result.status, result.error)
 
@@ -742,6 +737,11 @@ class PhiApp(App[None]):
             self._active_run_generation = None
             self._run_active = False
             if not self._shutting_down:
+                try:
+                    await self._refresh_context_inspection()
+                except Exception as error:
+                    self._context_inspection = None
+                    self._show_error(f"Context status unavailable: {error}")
                 self._update_status()
 
     async def _take_next_pending(self) -> str | None:
@@ -829,23 +829,10 @@ class PhiApp(App[None]):
                     await reasoning.remove()
         transcript.scroll_end(animate=False)
 
-    def _record_provider_usage(self, result: RunResult) -> None:
-        for step in result.steps:
-            usage = step.response.usage
-            if usage is None:
-                continue
-            values = {
-                "prompt_tokens": usage.prompt_tokens,
-                "completion_tokens": usage.completion_tokens,
-                "total_tokens": usage.total_tokens,
-                "cached_tokens": usage.cached_tokens,
-                "reasoning_tokens": usage.reasoning_tokens,
-            }
-            for name, value in values.items():
-                if value is not None:
-                    self._provider_usage[name] = self._provider_usage.get(name, 0) + value
-
     def action_cancel_run(self) -> None:
+        if isinstance(self.screen, ContextInspectorScreen):
+            self.screen.action_close()
+            return
         self._request_run_cancellation()
 
     def _request_run_cancellation(self) -> None:
@@ -911,10 +898,51 @@ class PhiApp(App[None]):
             if self._runtime is not None and self._runtime.approval_policy is not None
             else "unavailable"
         )
-        self.query_one("#status-bar", Static).update(
-            f"{state} · Model {metadata.model or '-'} · Session {identity} · "
-            f"Approval {approval} · {self.cwd}"
+        width = self.size.width
+        context = self._context_status(width < 70)
+        if width < 70:
+            text = f"{state} · {context} · Model {metadata.model or '-'}"
+        elif width < 120:
+            text = f"{state} · {context} · Model {metadata.model or '-'} · Approval {approval}"
+        else:
+            text = (
+                f"{state} · {context} · Model {metadata.model or '-'} · Session {identity} · "
+                f"Approval {approval} · {self.cwd}"
+            )
+        self.query_one("#status-bar", Static).update(text)
+
+    def _context_status(self, compact: bool) -> str:
+        label = "Ctx" if compact else "Context"
+        if self._run_active:
+            return f"{label} updating…"
+        inspection = self._context_inspection
+        if inspection is None:
+            return f"{label} unavailable"
+        estimate = inspection.estimate.tokens
+        limit = inspection.effective_input_limit
+        utilization = inspection.utilization_percent
+        if limit is None or utilization is None:
+            return f"{label} ~{estimate} · limit unknown"
+        safe = inspection.safe_prompt_limit
+        return (
+            f"{label} ~{estimate}/{limit} ({utilization:.1f}%) · "
+            f"safe {safe if safe is not None else 'unknown'}"
         )
+
+    async def _refresh_context_inspection(self) -> None:
+        runtime, handle = self._require_session()
+        _model_id, model_info = self._selected_model(runtime, handle)
+        self._context_inspection = await inspect_context(
+            runtime.storage,
+            handle,
+            settings=runtime.settings,
+            model_info=model_info,
+            tools=runtime.resources.tools,
+            instructions=runtime.resources.instruction_assembly,
+        )
+
+    def on_resize(self) -> None:
+        self._update_status()
 
     def _report_diagnostics(self, diagnostics: tuple[object, ...]) -> None:
         for diagnostic in diagnostics:

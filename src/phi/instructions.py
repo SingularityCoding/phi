@@ -13,6 +13,59 @@ Never claim that an action was completed unless you performed it and observed th
 
 
 @dataclass(frozen=True)
+class InstructionSection:
+    """Trusted stable-instruction source retained alongside the assembled prompt."""
+
+    id: str
+    delimiter_label: str | None
+    origin: str
+    source: str
+    content: str
+
+    @property
+    def rendered(self) -> str:
+        if self.delimiter_label is None:
+            return self.content
+        ending = "" if self.content.endswith("\n") else "\n"
+        label = self.delimiter_label.upper()
+        return f"--- BEGIN {label} ---\n{self.content}{ending}--- END {label} ---"
+
+    @property
+    def characters(self) -> int:
+        return len(self.content)
+
+    @property
+    def inclusion(self) -> str:
+        return "Stable · included"
+
+
+@dataclass(frozen=True)
+class InstructionAssembly:
+    """Stable prompt and trusted source metadata with one structural source of truth."""
+
+    sections: tuple[InstructionSection, ...]
+
+    @property
+    def stable_instructions(self) -> str:
+        return "\n\n".join(section.rendered for section in self.sections)
+
+    @classmethod
+    def from_prompt(cls, prompt: str) -> InstructionAssembly:
+        """Represent caller-supplied instructions without inventing a trusted origin."""
+
+        sections = (
+            InstructionSection(
+                id="unattributed",
+                delimiter_label=None,
+                origin="Unattributed stable instructions",
+                source="Application caller",
+                content=prompt,
+            ),
+        )
+        return cls(sections if prompt else ())
+
+
+@dataclass(frozen=True)
 class ProjectInstructions:
     """Stable repository instructions selected from the working-directory root."""
 

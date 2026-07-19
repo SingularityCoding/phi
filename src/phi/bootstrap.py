@@ -18,7 +18,13 @@ from phi.agents import (
 )
 from phi.environment import ConfinedEnvironment
 from phi.harness import EventEmitter
-from phi.instructions import PHI_BASE_INSTRUCTIONS, ProjectInstructions, load_project_instructions
+from phi.instructions import (
+    PHI_BASE_INSTRUCTIONS,
+    InstructionAssembly,
+    InstructionSection,
+    ProjectInstructions,
+    load_project_instructions,
+)
 from phi.mcp import (
     McpConfigDiagnostic,
     McpConfigError,
@@ -72,7 +78,7 @@ class RuntimeResources:
     project_instructions: ProjectInstructions
     skill_discovery: SkillDiscovery
     agent_definitions: AgentDefinitionDiscovery
-    stable_instructions: str
+    instruction_assembly: InstructionAssembly
     environment: ConfinedEnvironment
     mcp: McpRuntime
     agents: AgentRuntime
@@ -80,6 +86,14 @@ class RuntimeResources:
     tools: ToolRegistry
     dispatcher: ToolDispatcher
     diagnostics: tuple[RuntimeDiagnostic, ...]
+
+    @property
+    def stable_instructions(self) -> str:
+        return self.instruction_assembly.stable_instructions
+
+    @property
+    def instruction_sections(self) -> tuple[InstructionSection, ...]:
+        return self.instruction_assembly.sections
 
     def invoke_skill(self, name: str) -> str:
         """Select an already loaded Skill through the trusted user route."""
@@ -314,16 +328,59 @@ def assemble_stable_instructions(
 ) -> str:
     """Compose the one stable prompt prefix shared by inspection and execution."""
 
-    sections = (
-        _instruction_section("PHI BASE INSTRUCTIONS", base_instructions),
-        _instruction_section("PERSONAL INSTRUCTIONS", personal_instructions),
-        _instruction_section("PROJECT INSTRUCTIONS", project_instructions.content),
-        _instruction_section(
-            "MODEL-INVOKABLE SKILLS",
-            render_model_skill_menu(skill_discovery.skills),
+    assembly = assemble_instruction_assembly(
+        base_instructions=base_instructions,
+        personal_instructions=personal_instructions,
+        project_instructions=project_instructions,
+        skill_discovery=skill_discovery,
+    )
+    return assembly.stable_instructions
+
+
+def assemble_instruction_assembly(
+    *,
+    base_instructions: str,
+    personal_instructions: str,
+    project_instructions: ProjectInstructions,
+    skill_discovery: SkillDiscovery,
+) -> InstructionAssembly:
+    """Retain trusted instruction origins without parsing the rendered system prompt."""
+
+    candidates = (
+        InstructionSection(
+            id="phi-base",
+            delimiter_label="Phi base instructions",
+            origin="Phi base",
+            source="Phi built-in instructions",
+            content=base_instructions,
+        ),
+        InstructionSection(
+            id="personal",
+            delimiter_label="Personal instructions",
+            origin="Personal",
+            source="Host-configured personal instructions",
+            content=personal_instructions,
+        ),
+        InstructionSection(
+            id="project",
+            delimiter_label="Project instructions",
+            origin="Project",
+            source=(
+                str(project_instructions.source_path)
+                if project_instructions.source_path is not None
+                else "No project instruction file"
+            ),
+            content=project_instructions.content,
+        ),
+        InstructionSection(
+            id="model-skills",
+            delimiter_label="Model-invokable Skills",
+            origin="Model-invocable Skills",
+            source="Discovered Model-invocable Skill menu",
+            content=render_model_skill_menu(skill_discovery.skills),
         ),
     )
-    return "\n\n".join(section for section in sections if section is not None)
+    return InstructionAssembly(tuple(section for section in candidates if section.content.strip()))
 
 
 async def build_runtime_resources(
@@ -351,12 +408,13 @@ async def build_runtime_resources(
         project_root=project_skill_root or canonical_cwd / ".phi" / "skills",
         project_ignore_root=canonical_cwd,
     )
-    stable_instructions = assemble_stable_instructions(
+    instruction_assembly = assemble_instruction_assembly(
         base_instructions=base_instructions,
         personal_instructions=personal_instructions,
         project_instructions=project_instructions,
         skill_discovery=discovery,
     )
+    stable_instructions = instruction_assembly.stable_instructions
     agent_definitions = discover_agent_definitions(
         global_root=(global_agent_root or Path("~/.phi/agents")).expanduser(),
         project_root=project_agent_root or canonical_cwd / ".phi" / "agents",
@@ -409,7 +467,7 @@ async def build_runtime_resources(
         project_instructions=project_instructions,
         skill_discovery=discovery,
         agent_definitions=agent_definitions,
-        stable_instructions=stable_instructions,
+        instruction_assembly=instruction_assembly,
         environment=environment,
         mcp=mcp,
         agents=agents,
@@ -423,10 +481,3 @@ async def build_runtime_resources(
             *mcp.diagnostics,
         ),
     )
-
-
-def _instruction_section(label: str, content: str) -> str | None:
-    if not content.strip():
-        return None
-    ending = "" if content.endswith("\n") else "\n"
-    return f"--- BEGIN {label} ---\n{content}{ending}--- END {label} ---"

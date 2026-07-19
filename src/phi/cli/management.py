@@ -9,9 +9,9 @@ import httpx
 
 from phi.bootstrap import HostConfigurationError, HostRuntime, model_config_from_settings
 from phi.cli.model_selection import resolve_available_model
-from phi.harness import ContextInspection
 from phi.model import ModelConfig, ModelInfo
 from phi.sessions import (
+    ContextInspection,
     SessionHandle,
     SessionStorage,
     inspect_context,
@@ -137,7 +137,7 @@ async def execute_context_inspection(
             settings=runtime.settings,
             model_info=model_info,
             tools=runtime.resources.tools,
-            stable_instructions=runtime.resources.stable_instructions,
+            instructions=runtime.resources.instruction_assembly,
         )
         diagnostics = tuple(
             dict.fromkeys(

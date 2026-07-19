@@ -19,7 +19,7 @@ from phi.harness.compaction import (
     should_compact,
     summary_output_limit,
 )
-from phi.harness.context import Context, ContextInspection, build_context
+from phi.harness.context import Context, build_context
 from phi.harness.events import (
     ApprovalDecided,
     Event,
@@ -47,7 +47,6 @@ __all__ = [
     "CompactionSelection",
     "Context",
     "ContextCapacityError",
-    "ContextInspection",
     "ContextPolicyError",
     "Event",
     "EventBus",

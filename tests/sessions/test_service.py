@@ -3,10 +3,12 @@ from __future__ import annotations
 import pytest
 
 from phi.harness import RunStatus
+from phi.instructions import InstructionAssembly, InstructionSection
 from phi.model import ModelInfo, ModelRequest, ModelResponse, ScriptedModel, ToolCall, Usage
 from phi.sessions import (
     AssistantMessageEntry,
     InvalidSessionLeafError,
+    ProjectionCounts,
     SessionStorage,
     ToolResultEntry,
     UserMessageEntry,
@@ -231,13 +233,24 @@ async def test_context_inspection_uses_the_send_builder_without_calling_the_mode
         max_steps=1,
     )
 
+    instructions = InstructionAssembly(
+        (
+            InstructionSection(
+                id="stable",
+                delimiter_label=None,
+                origin="Test fixture",
+                source="deterministic test",
+                content="stable",
+            ),
+        )
+    )
     inspection = await inspect_context(
         storage,
         handle,
         settings=Settings(),
         model_info=ModelInfo("model-a", max_input_tokens=20_000),
         tools=tools,
-        stable_instructions="stable",
+        instructions=instructions,
     )
 
     assert len(model.requests) == 1
@@ -246,9 +259,52 @@ async def test_context_inspection_uses_the_send_builder_without_calling_the_mode
         {"role": "user", "content": "question"},
         {"role": "assistant", "content": "answer"},
     ]
+    assert inspection.request == ModelRequest(
+        messages=[
+            {"role": "system", "content": "stable"},
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": "answer"},
+        ],
+        tools=[],
+        model="model-a",
+    )
+    with pytest.raises(TypeError):
+        inspection.request.messages[0]["content"] = "changed"
     assert inspection.context.character_counts["system_prompt"] == 6
+    assert inspection.model_id == "model-a"
+    assert inspection.projection == ProjectionCounts(
+        session_path_entries=2,
+        conversation_view_entries=2,
+        context_messages=2,
+        request_messages=3,
+    )
+    assert inspection.instructions == instructions.sections
+    assert [message.label for message in inspection.messages] == [
+        "User message 1",
+        "Assistant message 2",
+    ]
+    assert all(message.provenance == "Conversation View" for message in inspection.messages)
+    assert all(message.inclusion == "Selected · included" for message in inspection.messages)
     assert inspection.estimate.used_provider_anchor is True
+    assert inspection.provider_anchor_prompt_tokens == 20
     assert inspection.effective_input_limit == 20_000
+    assert inspection.utilization_percent == inspection.estimate.tokens / 20_000 * 100
+
+    unknown = await inspect_context(
+        storage,
+        handle,
+        settings=Settings(),
+        model_info=None,
+        tools=tools,
+        instructions=instructions,
+    )
+    assert unknown.effective_input_limit is None
+    assert unknown.safe_prompt_limit is None
+    assert unknown.utilization_percent is None
+    assert unknown.diagnostics == (
+        "Model input limit is unknown; proactive Context budgeting is best-effort",
+    )
+    assert len(model.requests) == 1
 
 
 async def test_switching_an_entry_creates_navigable_sibling_leaves(tmp_path) -> None:
@@ -464,6 +520,47 @@ async def test_fork_and_leaf_switch_require_complete_tool_exchange_boundaries(
     assert isinstance(assistant, AssistantMessageEntry)
     assert isinstance(first_result, ToolResultEntry)
     assert isinstance(final_result, ToolResultEntry)
+
+    inspection = await inspect_context(
+        storage,
+        handle,
+        settings=Settings(),
+        model_info=None,
+        tools=tools,
+        instructions=InstructionAssembly.from_prompt("stable"),
+    )
+    assert [message.label for message in inspection.messages] == [
+        "User message 1",
+        "Assistant Tool Calls 2",
+        "Tool Result 3",
+        "Tool Result 4",
+    ]
+    assert inspection.messages[1].message["tool_calls"] == [
+        {
+            "id": "one",
+            "type": "function",
+            "function": {
+                "name": "missing-one",
+                "arguments": "{}",
+            },
+        },
+        {
+            "id": "two",
+            "type": "function",
+            "function": {
+                "name": "missing-two",
+                "arguments": "{}",
+            },
+        },
+    ]
+    assert inspection.messages[2].message == {
+        "role": "tool",
+        "tool_call_id": "one",
+        "content": "unknown_tool: missing-one",
+    }
+    assert "Tool Call: missing-one" in inspection.messages[1].readable_content
+    assert "Arguments: {}" in inspection.messages[1].readable_content
+    assert inspection.messages[2].readable_content == "unknown_tool: missing-one"
 
     for unsafe_entry in (assistant, first_result):
         with pytest.raises(InvalidSessionLeafError):

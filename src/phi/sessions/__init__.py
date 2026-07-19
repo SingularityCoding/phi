@@ -18,6 +18,13 @@ from phi.sessions.errors import (
     SessionNotFoundError,
     StaleSessionHandleError,
 )
+from phi.sessions.inspection import (
+    ContextInspection,
+    InspectedMessage,
+    InspectedSummary,
+    InspectedTool,
+    ProjectionCounts,
+)
 from phi.sessions.metadata import SessionMetadata
 from phi.sessions.service import (
     ConversationView,
@@ -46,13 +53,18 @@ from phi.sessions.trace import redact_text, serialize_run_event
 __all__ = [
     "AssistantMessageEntry",
     "CompactionEntry",
+    "ContextInspection",
     "ConversationView",
     "CorruptSessionError",
     "Entry",
     "IncompatibleSessionVersionError",
     "InvalidSessionLeafError",
+    "InspectedMessage",
+    "InspectedSummary",
+    "InspectedTool",
     "MissingEntryParentError",
     "PromptBudgetAnchor",
+    "ProjectionCounts",
     "RunInvocation",
     "RunLifecycle",
     "SessionError",
