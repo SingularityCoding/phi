@@ -180,6 +180,19 @@ def model_config_from_settings(settings: Settings) -> ModelConfig:
 async def build_headless_runtime(cwd: Path) -> HostRuntime:
     """Build one production runtime with the fail-closed headless approval policy."""
 
+    return await _build_host_runtime(
+        cwd,
+        approval_policy=RuleBasedApprovalPolicy(HEADLESS_MODE),
+    )
+
+
+async def _build_host_runtime(
+    cwd: Path,
+    *,
+    approval_policy: ApprovalPolicy,
+) -> HostRuntime:
+    """Assemble the shared production lifetime used by both Host adapters."""
+
     settings = Settings()
     config = model_config_from_settings(settings)
     client = httpx.AsyncClient()
@@ -189,7 +202,7 @@ async def build_headless_runtime(cwd: Path) -> HostRuntime:
         resources = await build_runtime_resources(
             cwd,
             base_instructions=PHI_BASE_INSTRUCTIONS,
-            approval_policy=RuleBasedApprovalPolicy(HEADLESS_MODE),
+            approval_policy=approval_policy,
         )
     except BaseException:
         if resources is not None:
@@ -213,32 +226,10 @@ async def build_interactive_runtime(
 ) -> HostRuntime:
     """Build one production runtime with an interactive, user-resolving policy."""
 
-    settings = Settings()
-    config = model_config_from_settings(settings)
-    client = httpx.AsyncClient()
-    resources: RuntimeResources | None = None
     policy = RuleBasedApprovalPolicy(DEFAULT_MODE, approval_resolver)
-    try:
-        available_models = tuple(await list_available_models(config, client=client))
-        resources = await build_runtime_resources(
-            cwd,
-            base_instructions=PHI_BASE_INSTRUCTIONS,
-            approval_policy=policy,
-        )
-    except BaseException:
-        if resources is not None:
-            await resources.close()
-        await client.aclose()
-        raise
-    return HostRuntime(
-        settings=settings,
-        model=OpenAICompatibleModel(config, client=client),
-        available_models=available_models,
-        storage=SessionStorage(settings.session_dir),
-        resources=resources,
-        approval_policy=policy,
-        close_callback=client.aclose,
-    )
+    runtime = await _build_host_runtime(cwd, approval_policy=policy)
+    runtime.approval_policy = policy
+    return runtime
 
 
 class CwdRuntimeBootstrap:

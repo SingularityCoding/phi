@@ -21,6 +21,7 @@ from phi.harness import (
     RunEvent,
     RunFinished,
     RunResult,
+    RunStarted,
     RunStatus,
     ToolCallCompleted,
     ToolCallStarted,
@@ -145,6 +146,10 @@ class PhiApp(App[None]):
         self._runtime_closed = False
         self._shutting_down = False
         self._active_run_task: asyncio.Task[None] | None = None
+        self._active_run_started = False
+        self._cancel_requested = False
+        self._run_generation = 0
+        self._active_run_generation: int | None = None
         self._run_active = False
         self._last_run_status: RunStatus | None = None
         self._draining = False
@@ -302,12 +307,18 @@ class PhiApp(App[None]):
         if action == "remove":
             await self._remove_pending(pending)
         elif action == "toggle":
-            pending.disposition = (
-                QueueDisposition.STEER
-                if pending.disposition is QueueDisposition.QUEUE
-                else QueueDisposition.QUEUE
-            )
+            if pending.disposition is QueueDisposition.QUEUE:
+                if not self._run_active or self._active_run_generation is None:
+                    self._show_error("Steer requires an active Run")
+                    return
+                pending.disposition = QueueDisposition.STEER
+                pending.target_run_generation = self._active_run_generation
+            else:
+                pending.disposition = QueueDisposition.QUEUE
+                pending.target_run_generation = None
             self.query_one(f"#pending-{pending.id}", QueueMessageRow).refresh_pending(pending)
+            if pending.disposition is QueueDisposition.QUEUE:
+                await self._start_pending_drain()
         elif action == "edit":
             self.query_one("#prompt", PromptInput).load_text(pending.text)
             await self._remove_pending(pending)
@@ -319,6 +330,15 @@ class PhiApp(App[None]):
         rows = self.query(f"#pending-{pending.id}").nodes
         if rows:
             await rows[0].remove()
+
+    async def _start_pending_drain(self) -> None:
+        if self._draining or self._shutting_down:
+            return
+        text = await self._take_next_pending()
+        if text is None:
+            return
+        self._draining = True
+        self.run_worker(self._run_message(text), group="runs", exclusive=True)
 
     async def _execute_command(self, text: str) -> None:
         try:
@@ -642,13 +662,26 @@ class PhiApp(App[None]):
 
     async def _run_one_message(self, text: str) -> None:
         runtime, handle = self._require_session()
+        self._run_generation += 1
+        self._active_run_generation = self._run_generation
+        self._active_run_started = False
         self._run_active = True
         self._update_status()
-        await self.query_one("#transcript", TranscriptView).mount(UserMessageView(text))
-        _model_id, model_info = self._selected_model(runtime, handle)
+        transcript = self.query_one("#transcript", TranscriptView)
+        user_view = UserMessageView(text)
+        await transcript.mount(user_view)
+        if self._shutting_down:
+            if user_view.is_mounted:
+                await user_view.remove()
+            self._active_run_started = False
+            self._cancel_requested = False
+            self._active_run_generation = None
+            self._run_active = False
+            return
 
         async def execute() -> None:
             assert self.current_session is not None
+            _model_id, model_info = self._selected_model(runtime, handle)
             updated, result = await send_message(
                 self.current_session,
                 text,
@@ -677,15 +710,36 @@ class PhiApp(App[None]):
             await self._active_run_task
         except Exception as error:
             self._last_run_status = RunStatus.FAILED
-            self._show_error(f"Run failed: {error}")
+            persisted = False
+            if user_view.is_mounted:
+                await user_view.remove()
             if self.current_session is not None:
-                with suppress(Exception):
-                    self.current_session = await resume_session(
+                try:
+                    refreshed = await resume_session(
                         runtime.storage,
                         self.current_session.session_id,
                     )
+                    presentation = await materialize_presentation(runtime.storage, refreshed)
+                    persisted = any(
+                        isinstance(entry, UserMessageEntry)
+                        and entry.parent_id == handle.leaf_id
+                        and entry.content == text
+                        for entry in presentation.entries
+                    )
+                    self.current_session = refreshed
+                    await self._render_current_conversation()
+                except Exception:
+                    pass
+            if not persisted and not self._shutting_down:
+                prompt = self.query_one("#prompt", PromptInput)
+                prompt.load_text(text)
+                prompt.focus()
+            self._show_error(f"Run failed: {error}")
         finally:
             self._active_run_task = None
+            self._active_run_started = False
+            self._cancel_requested = False
+            self._active_run_generation = None
             self._run_active = False
             if not self._shutting_down:
                 self._update_status()
@@ -698,15 +752,17 @@ class PhiApp(App[None]):
             None,
         )
         if queued is None:
-            queued = self._pending[0]
-            queued.disposition = QueueDisposition.QUEUE
+            return None
         text = queued.text
         await self._remove_pending(queued)
         return text
 
     async def _inject_messages(self) -> list[str]:
         steers = [
-            pending for pending in self._pending if pending.disposition is QueueDisposition.STEER
+            pending
+            for pending in self._pending
+            if pending.disposition is QueueDisposition.STEER
+            and pending.target_run_generation == self._active_run_generation
         ]
         messages = [pending.text for pending in steers]
         for pending in steers:
@@ -716,6 +772,12 @@ class PhiApp(App[None]):
     async def emit(self, event: RunEvent) -> None:
         """Consume shared Run Events for presentation only."""
 
+        if isinstance(event, RunStarted):
+            self._active_run_started = True
+            if self._cancel_requested:
+                task = self._active_run_task
+                if task is not None and not task.done():
+                    task.cancel()
         if self._shutting_down:
             return
         transcript = self.query_one("#transcript", TranscriptView)
@@ -784,8 +846,17 @@ class PhiApp(App[None]):
                     self._provider_usage[name] = self._provider_usage.get(name, 0) + value
 
     def action_cancel_run(self) -> None:
-        if self._active_run_task is not None and not self._active_run_task.done():
-            self._active_run_task.cancel()
+        self._request_run_cancellation()
+
+    def _request_run_cancellation(self) -> None:
+        task = self._active_run_task
+        if task is not None and not task.done():
+            if self._active_run_started:
+                task.cancel()
+            else:
+                self._cancel_requested = True
+        elif self._run_active or self._draining:
+            self._cancel_requested = True
 
     async def action_quit(self) -> None:
         await self._close_runtime()
@@ -799,10 +870,11 @@ class PhiApp(App[None]):
             return
         self._runtime_closed = True
         self._shutting_down = True
-        if self._active_run_task is not None and not self._active_run_task.done():
-            self._active_run_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._active_run_task
+        self._request_run_cancellation()
+        task = self._active_run_task
+        if task is not None and not task.done():
+            with suppress(asyncio.CancelledError, Exception):
+                await task
         if self._runtime is not None:
             try:
                 await self._runtime.close()

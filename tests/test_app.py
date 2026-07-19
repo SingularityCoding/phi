@@ -25,8 +25,18 @@ from phi.model import (
     Usage,
 )
 from phi.sessions import SessionStorage, materialize_conversation, resume_session
+from phi.sessions.entries import Entry
+from phi.sessions.metadata import SessionMetadata
+from phi.sessions.storage import LoadedSession
 from phi.settings import Settings
-from phi.tools import BYPASS_MODE, DEFAULT_MODE, ApprovalMode, RuleBasedApprovalPolicy
+from phi.tools import (
+    BYPASS_MODE,
+    DEFAULT_MODE,
+    ApprovalMode,
+    RuleBasedApprovalPolicy,
+    Tool,
+    tool,
+)
 from phi.ui.app import PhiApp
 
 
@@ -38,6 +48,8 @@ class TuiRuntimeFactory:
     available_models: tuple[ModelInfo, ...] = (ModelInfo("model-a", 100_000),)
     approval_mode: ApprovalMode = BYPASS_MODE
     close_count: int = 0
+    storage: SessionStorage | None = None
+    extra_tools: tuple[Tool, ...] = ()
 
     async def __call__(self, cwd: Path) -> HostRuntime:
         policy = RuleBasedApprovalPolicy(self.approval_mode)
@@ -49,6 +61,7 @@ class TuiRuntimeFactory:
             global_agent_root=self.root / "global-agents",
             global_mcp_config_path=self.root / "global-mcp.json",
         )
+        resources.tools.register_many(self.extra_tools)
 
         async def observe_close() -> None:
             self.close_count += 1
@@ -57,7 +70,7 @@ class TuiRuntimeFactory:
             settings=self.settings,
             model=self.model,
             available_models=self.available_models,
-            storage=SessionStorage(self.settings.session_dir),
+            storage=self.storage or SessionStorage(self.settings.session_dir),
             resources=resources,
             close_callback=observe_close,
             approval_policy=policy,
@@ -92,6 +105,48 @@ class GatedModel(ScriptedModel):
                 raise
         async for event in super().request_stream(request):
             yield event
+
+
+class GatedLoadStorage(SessionStorage):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self._armed = False
+
+    def arm(self) -> None:
+        self._armed = True
+
+    async def load_state(self, session_id: str) -> LoadedSession:
+        if self._armed:
+            self._armed = False
+            self.started.set()
+            await self.release.wait()
+        return await super().load_state(session_id)
+
+
+class FailingAppendStorage(SessionStorage):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.fail_next_append = True
+
+    async def append_entries(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        entries: tuple[Entry, ...],
+        metadata: SessionMetadata,
+    ) -> LoadedSession:
+        if self.fail_next_append:
+            self.fail_next_append = False
+            raise RuntimeError("simulated append failure")
+        return await super().append_entries(
+            session_id,
+            expected_revision=expected_revision,
+            entries=entries,
+            metadata=metadata,
+        )
 
 
 class FragmentedToolModel(ScriptedModel):
@@ -732,6 +787,48 @@ async def test_escape_cancels_only_active_run_then_drains_ordinary_queue(
         assert any("completed" in status for status in statuses)
 
 
+async def test_escape_before_run_start_persists_cancelled_message_and_drains_queue(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    storage = GatedLoadStorage(tmp_path / "sessions")
+    model = ScriptedModel([ModelResponse(content="queued answer")])
+    factory = TuiRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        model,
+        storage=storage,
+    )
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        storage.arm()
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.load_text("cancel before start")
+        await pilot.press("enter")
+        await storage.started.wait()
+        prompt.load_text("still run this")
+        await pilot.press("enter")
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.current_session is not None
+        assert app.current_session.revision == 0
+
+        storage.release.set()
+        await app.workers.wait_for_complete()
+        view = await materialize_conversation(storage, app.current_session)
+        assert [entry.content for entry in view.entries if entry.entry_type == "user_message"] == [
+            "cancel before start",
+            "still run this",
+        ]
+        statuses = [str(status.render()) for status in app.query(".run-status")]
+        assert any("cancelled" in status for status in statuses)
+        assert any("completed" in status for status in statuses)
+
+
 async def test_session_topology_command_cannot_race_active_run(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -803,6 +900,63 @@ async def test_steer_is_injected_once_at_next_step_without_becoming_an_entry(
         ]
 
 
+async def test_unconsumed_steer_remains_pending_and_is_not_sent_in_a_later_run(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = GatedModel(
+        [
+            ModelResponse(content="first answer"),
+            ModelResponse(content="queued answer"),
+        ]
+    )
+    factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.load_text("initial")
+        await pilot.press("enter")
+        await model.started.wait()
+
+        prompt.load_text("too late to steer")
+        await pilot.press("enter")
+        await pilot.pause()
+        toggle_id = next(
+            button.id
+            for button in app.query(".queue-row Button")
+            if button.id is not None and button.id.startswith("toggle-")
+        )
+        await pilot.click(f"#{toggle_id}")
+        prompt.load_text("ordinary queue")
+        await pilot.click("#prompt")
+        await pilot.press("enter")
+
+        model.release.set()
+        await app.workers.wait_for_complete()
+        assert len(model.requests) == 2
+        assert {"role": "user", "content": "too late to steer"} not in model.requests[1].messages
+        assert model.requests[1].messages[-1] == {
+            "role": "user",
+            "content": "ordinary queue",
+        }
+        assert app.current_session is not None
+        view = await materialize_conversation(
+            SessionStorage(factory.settings.session_dir),
+            app.current_session,
+        )
+        assert [entry.content for entry in view.entries if entry.entry_type == "user_message"] == [
+            "initial",
+            "ordinary queue",
+        ]
+        pending = list(app.query(".queued-message"))
+        assert len(pending) == 1
+        assert "steer" in str(pending[0].render())
+        assert "too late to steer" in str(pending[0].render())
+
+
 async def test_partial_tool_json_stays_hidden_and_reasoning_is_collapsed(
     tmp_path: Path,
 ) -> None:
@@ -835,6 +989,7 @@ async def test_partial_tool_json_stays_hidden_and_reasoning_is_collapsed(
         assert len(cards) == 1
         card_content = str(cards[0].query_one(".tool-call-content").render())
         assert "complete" in card_content
+        assert "input.txt" in card_content
         assert "ground truth" in card_content
 
 
@@ -953,6 +1108,79 @@ async def test_failed_run_is_redacted_and_does_not_strand_queue(tmp_path: Path) 
         assert secret not in statuses
         assert "[REDACTED]" in statuses
         assert "recovered" in app.query_one(".assistant-message", Markdown).source
+
+
+async def test_pre_persistence_failure_removes_optimistic_message_and_restores_draft(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    storage = FailingAppendStorage(tmp_path / "sessions")
+    factory = TuiRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        ScriptedModel([]),
+        storage=storage,
+    )
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.load_text("retry this message")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+
+        assert app.current_session is not None
+        assert app.current_session.revision == 0
+        assert list(app.query(".user-message")) == []
+        assert prompt.text == "retry this message"
+        assert "simulated append failure" in str(list(app.query(".run-status"))[-1].render())
+
+
+async def test_tool_error_is_redacted_in_ui_but_remains_durable(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    secret = "sk-abcdefghijk"
+
+    @tool(name="leaky", description="Raise a credential-shaped failure.")
+    async def leaky() -> str:
+        raise RuntimeError(f"service rejected {secret}")
+
+    model = ScriptedModel(
+        [
+            ModelResponse(tool_calls=[ToolCall("leaky-1", "leaky", {})]),
+            ModelResponse(content="recovered"),
+        ]
+    )
+    factory = TuiRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        model,
+        extra_tools=(leaky,),
+    )
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.load_text("use the tool")
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+
+        card = app.query_one(".tool-call")
+        content = str(card.query_one(".tool-call-content").render())
+        assert "Arguments: {}" in content
+        assert secret not in content
+        assert "[REDACTED]" in content
+        assert app.current_session is not None
+        view = await materialize_conversation(
+            SessionStorage(factory.settings.session_dir),
+            app.current_session,
+        )
+        tool_result = next(entry for entry in view.entries if entry.entry_type == "tool_result")
+        assert tool_result.result.error is not None
+        assert secret in tool_result.result.error
 
 
 async def test_max_step_run_does_not_strand_queue(tmp_path: Path) -> None:

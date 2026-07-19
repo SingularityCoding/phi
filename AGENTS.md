@@ -39,9 +39,9 @@ current architecture/design documents, then historical material.
 
 ## Runtime settings
 
-See `CONTRIBUTING.md` for repository setup and how to launch Phi (`uv run phi`, currently a minimal
-Textual shell — press `q` to exit). Commands mentioned only in `docs/design/` are unavailable until
-their code and tests land.
+See `CONTRIBUTING.md` for repository setup and how to launch Phi (`uv run phi` opens the complete
+interactive Textual Host; use `/quit` or Ctrl+Q to exit). Commands mentioned only in `docs/design/`
+remain unavailable until their code and tests land.
 
 Runtime settings use the `PHI_` prefix and may be placed in `.env`:
 

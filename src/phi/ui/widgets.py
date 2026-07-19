@@ -16,6 +16,8 @@ from textual.widgets import (
     TextArea,
 )
 
+from phi.sessions import redact_text
+
 
 class QueueDisposition(StrEnum):
     QUEUE = "queue"
@@ -27,6 +29,7 @@ class PendingMessage:
     id: str
     text: str
     disposition: QueueDisposition = QueueDisposition.QUEUE
+    target_run_generation: int | None = None
 
 
 class PromptInput(TextArea):
@@ -127,8 +130,10 @@ class ToolCallView(Vertical):
         self.remove_class("running")
         self.add_class("failed" if error is not None else "completed")
         self._progress.display = False
-        outcome = f"Error: {error}" if error is not None else f"Result: {output}"
-        self._content.update(f"Tool · {self.tool_name} · complete\n{outcome}")
+        outcome = f"Error: {redact_text(error)}" if error is not None else f"Result: {output}"
+        self._content.update(
+            f"Tool · {self.tool_name} · complete\nArguments: {self.arguments}\n{outcome}"
+        )
 
 
 class CompactionEntryView(Static):

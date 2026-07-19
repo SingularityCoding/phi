@@ -48,14 +48,15 @@ The CLI also exposes `session list/resume/fork`, complete `context` inspection, 
 `mcp add/list/remove` operations. Use each command's `--help` output for its current arguments and
 options.
 
-The bare command continues to launch the minimal Textual shell:
+The bare command launches the complete interactive Textual Host:
 
 ```bash
 uv run phi
 ```
 
-Commands documented only in system-design documents beyond this implemented surface remain
-unavailable until their code and tests land.
+Enter submits, Shift+Enter inserts a newline, `/` shows available commands, Escape cancels the
+active Run, and `/quit` or Ctrl+Q exits after cleanup. Commands documented only in system-design
+documents beyond this implemented surface remain unavailable until their code and tests land.
 
 ## Required validation
 
