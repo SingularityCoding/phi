@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -11,11 +13,15 @@ from typer.testing import CliRunner
 
 from phi.bootstrap import HostRuntime, build_runtime_resources
 from phi.cli import app
+from phi.cli.headless import execute_headless_run
+from phi.cli.main import _JsonlEventWriter
+from phi.harness import EventBus, RunFinished, RunStarted, RunStatus
 from phi.instructions import PHI_BASE_INSTRUCTIONS
 from phi.model import (
     ContentDelta,
     FinishEvent,
     Model,
+    ModelEvent,
     ModelHTTPError,
     ModelInfo,
     ModelRequest,
@@ -23,7 +29,12 @@ from phi.model import (
     ScriptedModel,
     ToolCall,
 )
-from phi.sessions import SessionStorage
+from phi.sessions import (
+    SessionStorage,
+    UserMessageEntry,
+    materialize_conversation,
+    resume_session,
+)
 from phi.settings import Settings
 from phi.tools import HEADLESS_MODE, RuleBasedApprovalPolicy
 
@@ -77,6 +88,101 @@ def _session_id(stderr: str) -> str:
     )
 
 
+def test_run_creates_a_durable_session_and_keeps_stdout_machine_usable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = ScriptedModel([ModelResponse(content="completed output")])
+    settings = _settings(tmp_path)
+    factory = ScenarioRuntimeFactory(
+        tmp_path,
+        settings,
+        model,
+        (ModelInfo("model-a"),),
+    )
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr("phi.cli.main._runtime_factory", factory)
+
+    result = runner.invoke(app, ["run", "say hello"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "completed output\n"
+    assert result.stderr.startswith("session_id=")
+    session_id = _session_id(result.stderr)
+
+    async def load_conversation() -> tuple[str, list[str]]:
+        storage = SessionStorage(settings.session_dir)
+        view = await materialize_conversation(storage, await resume_session(storage, session_id))
+        return view.model or "", [entry.entry_type for entry in view.entries]
+
+    selected_model, entry_types = asyncio.run(load_conversation())
+    assert selected_model == "model-a"
+    assert entry_types == ["user_message", "assistant_message"]
+    assert model.requests[0].messages[-1] == {"role": "user", "content": "say hello"}
+    assert factory.close_count == 1
+    assert result.stderr.count("Model input limit is unknown") == 1
+
+
+def test_run_rejects_a_blank_explicit_model_before_session_mutation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = ScriptedModel([ModelResponse(content="must not run")])
+    settings = _settings(tmp_path)
+    factory = ScenarioRuntimeFactory(
+        tmp_path,
+        settings,
+        model,
+        (ModelInfo("model-a"),),
+    )
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr("phi.cli.main._runtime_factory", factory)
+
+    result = runner.invoke(app, ["run", "task", "--model", "   "])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "--model must contain non-whitespace text" in result.stderr
+    assert list(settings.session_dir.glob("*.metadata.json")) == []
+    assert model.requests == []
+    assert factory.close_count == 1
+
+
+def test_run_reports_resumed_session_diagnostics_once(monkeypatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _settings(tmp_path)
+    factory = ScenarioRuntimeFactory(
+        tmp_path,
+        settings,
+        ScriptedModel(
+            [
+                ModelResponse(content="first response"),
+                ModelResponse(content="continued response"),
+            ]
+        ),
+        (ModelInfo("model-a"),),
+    )
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr("phi.cli.main._runtime_factory", factory)
+    first = runner.invoke(app, ["run", "first task"])
+    session_id = _session_id(first.stderr)
+    storage = SessionStorage(settings.session_dir)
+    with storage.journal_path(session_id).open("ab") as file:
+        file.write(b'{"schema_version":1,"entry_type":"user_message"')
+
+    continued = runner.invoke(app, ["run", "continue", "--session", session_id])
+
+    assert continued.exit_code == 0
+    assert continued.stdout == "continued response\n"
+    assert continued.stderr.count("ignored 1 uncommitted trailing Entry record(s)") == 1
+    assert factory.close_count == 2
+
+
 def test_json_mode_emits_the_same_redacted_ordered_records_as_trace(
     monkeypatch,
     tmp_path: Path,
@@ -122,6 +228,115 @@ def test_json_mode_emits_the_same_redacted_ordered_records_as_trace(
         .splitlines()
     ]
     assert records == trace_records
+
+
+async def test_jsonl_writer_encodes_records_as_utf8_bytes() -> None:
+    output = BytesIO()
+    writer = _JsonlEventWriter(output)
+
+    await writer.emit(RunStarted("运行", 0))
+
+    assert output.getvalue().decode("utf-8") == (
+        '{"event_index":0,"event_type":"run_started","payload":{},'
+        '"run_id":"运行","schema_version":1}\n'
+    )
+
+
+def test_json_mode_fails_when_event_output_cannot_be_written(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class FailedWriter:
+        async def emit(self, event: object) -> None:
+            del event
+            raise OSError("output closed")
+
+        def raise_if_failed(self) -> None:
+            raise OSError("output closed")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    factory = ScenarioRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        ScriptedModel([ModelResponse(content="unobservable")]),
+        (ModelInfo("model-a"),),
+    )
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr("phi.cli.main._runtime_factory", factory)
+    monkeypatch.setattr("phi.cli.main._JsonlEventWriter", FailedWriter)
+
+    result = runner.invoke(app, ["run", "task", "--json"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "output closed" in result.stderr
+
+
+async def test_cancelling_the_headless_host_task_closes_stream_and_persists_terminal_state(
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+    closed = asyncio.Event()
+    never = asyncio.Event()
+
+    class BlockingModel:
+        async def request(self, request: ModelRequest) -> ModelResponse:
+            raise AssertionError(f"ordinary Runs must stream: {request}")
+
+        async def request_stream(self, request: ModelRequest) -> AsyncIterator[ModelEvent]:
+            del request
+            started.set()
+            try:
+                await never.wait()
+                yield ContentDelta("unreachable")
+            finally:
+                closed.set()
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    factory = ScenarioRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        BlockingModel(),
+        (ModelInfo("model-a"),),
+    )
+    events: list[object] = []
+    reported_sessions: list[str] = []
+    host_task = asyncio.create_task(
+        execute_headless_run(
+            "keep the durable request",
+            cwd=workspace,
+            runtime_factory=factory,
+            session_id=None,
+            selected_model=None,
+            max_steps=1,
+            events=EventBus([events.append]),
+            report_session=reported_sessions.append,
+        )
+    )
+    await started.wait()
+
+    host_task.cancel()
+    outcome = await host_task
+
+    assert outcome.result.status is RunStatus.CANCELLED
+    assert closed.is_set()
+    assert factory.close_count == 1
+    assert reported_sessions == [outcome.session_id]
+    storage = SessionStorage(tmp_path / "sessions")
+    handle = await resume_session(storage, outcome.session_id)
+    view = await materialize_conversation(storage, handle)
+    assert [entry.entry_type for entry in view.entries] == ["user_message"]
+    assert isinstance(view.entries[0], UserMessageEntry)
+    assert view.entries[0].content == "keep the durable request"
+    trace_records = [
+        json.loads(line)
+        for line in storage.trace_path(outcome.session_id).read_text(encoding="utf-8").splitlines()
+    ]
+    assert trace_records[-1]["event_type"] == "run_finished"
+    assert trace_records[-1]["payload"]["status"] == "cancelled"
+    assert isinstance(events[-1], RunFinished)
 
 
 def test_cancelled_json_run_emits_a_terminal_event_and_exits_130(

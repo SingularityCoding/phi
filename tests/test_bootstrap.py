@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from phi.bootstrap import CwdRuntimeBootstrap, build_host_runtime, build_runtime_resources
+from phi.bootstrap import CwdRuntimeBootstrap, build_headless_runtime, build_runtime_resources
 from phi.mcp import McpConfigDiagnostic
 from phi.model import ModelConfig, ModelInfo, ModelResponse, ScriptedModel
 from phi.sessions import (
@@ -605,7 +605,7 @@ async def test_host_runtime_composes_one_catalog_client_and_closes_it_once(
     monkeypatch.setattr("phi.bootstrap.httpx.AsyncClient", lambda: client)
     monkeypatch.setattr("phi.bootstrap.list_available_models", static_catalog)
 
-    runtime = await build_host_runtime(cwd)
+    runtime = await build_headless_runtime(cwd)
 
     assert len(catalogs) == 1
     config, catalog_client = catalogs[0]
@@ -650,6 +650,6 @@ async def test_host_runtime_closes_its_client_when_model_catalog_loading_fails(
     monkeypatch.setattr("phi.bootstrap.list_available_models", failed_catalog)
 
     with pytest.raises(RuntimeError, match="catalog failed"):
-        await build_host_runtime(tmp_path)
+        await build_headless_runtime(tmp_path)
 
     assert client.close_count == 1

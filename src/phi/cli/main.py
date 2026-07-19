@@ -4,31 +4,49 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, BinaryIO
 
 import typer
 
-from phi.bootstrap import build_host_runtime
+from phi.bootstrap import build_headless_runtime
 from phi.cli.headless import execute_headless_run
 from phi.harness import RunEvent, RunStatus
 from phi.sessions import redact_text, serialize_run_event
 from phi.ui import run as run_tui
 
 app = typer.Typer(help="phi — an inspectable Agent Harness.")
-_runtime_factory = build_host_runtime
+_runtime_factory = build_headless_runtime
 
 
 class _JsonlEventWriter:
+    def __init__(self, output: BinaryIO | None = None) -> None:
+        self._output = sys.stdout.buffer if output is None else output
+        self._failure: Exception | None = None
+
     async def emit(self, event: RunEvent) -> None:
-        line = json.dumps(
-            serialize_run_event(event),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        sys.stdout.write(line)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        if self._failure is not None:
+            raise self._failure
+        try:
+            line = json.dumps(
+                serialize_run_event(event),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            payload = f"{line}\n".encode()
+            written = self._output.write(payload)
+            if written is not None and written != len(payload):
+                raise OSError(f"wrote {written} of {len(payload)} JSONL bytes")
+            self._output.flush()
+        except Exception as error:
+            self._failure = error
+            raise
+
+    def raise_if_failed(self) -> None:
+        """Restore fail-closed Host semantics after best-effort Event delivery."""
+
+        if self._failure is not None:
+            raise OSError(f"failed to write JSONL Events: {self._failure}") from self._failure
 
 
 @app.callback(invoke_without_command=True)
@@ -50,8 +68,10 @@ def run_command(
 
     if not task.strip():
         raise typer.BadParameter("TASK must contain non-whitespace text", param_hint="TASK")
-    events = _JsonlEventWriter() if json_output else None
+    events: _JsonlEventWriter | None = None
     try:
+        if json_output:
+            events = _JsonlEventWriter()
         outcome = asyncio.run(
             execute_headless_run(
                 task,
@@ -68,6 +88,8 @@ def run_command(
                 ),
             )
         )
+        if events is not None:
+            events.raise_if_failed()
     except KeyboardInterrupt:
         typer.echo("Run cancelled", err=True)
         raise typer.Exit(130) from None

@@ -46,16 +46,27 @@ async def execute_headless_run(
     if not isinstance(runtime, HostRuntime):
         raise TypeError("runtime factory must return HostRuntime")
     try:
+        reported_diagnostics: set[str] = set()
+
+        def report_new_diagnostics(diagnostics: tuple[object, ...]) -> None:
+            if report_diagnostic is None:
+                return
+            for diagnostic in diagnostics:
+                text = str(diagnostic)
+                if text not in reported_diagnostics:
+                    reported_diagnostics.add(text)
+                    report_diagnostic(text)
+
         model_config_from_settings(runtime.settings)
         if selected_model is not None and not selected_model.strip():
             raise ModelResolutionError("--model must contain non-whitespace text")
-        if report_diagnostic is not None:
-            for diagnostic in runtime.resources.diagnostics:
-                report_diagnostic(str(diagnostic))
+        report_new_diagnostics(runtime.resources.diagnostics)
 
         handle = (
             await resume_session(runtime.storage, session_id) if session_id is not None else None
         )
+        if handle is not None:
+            report_new_diagnostics(handle.diagnostics)
         explicit_model = _optional_text(selected_model)
         resumed_model = None if handle is None else _optional_text(handle.metadata.model)
         default_model = _optional_text(runtime.settings.default_model)
@@ -90,6 +101,7 @@ async def execute_headless_run(
             events=events,
             lifecycle=runtime.resources.agents,
         )
+        report_new_diagnostics(handle.diagnostics)
         return HeadlessOutcome(handle.session_id, result)
     finally:
         await runtime.close()

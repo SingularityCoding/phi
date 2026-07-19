@@ -799,7 +799,7 @@ async def _append(
             storage,
             state.envelope.metadata,
             state.envelope.revision,
-            diagnostics=state.diagnostics,
+            diagnostics=tuple(dict.fromkeys((*handle.diagnostics, *state.diagnostics))),
         ),
         prompt_budget_anchor=prompt_budget_anchor,
     )

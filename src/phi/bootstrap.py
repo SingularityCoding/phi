@@ -174,8 +174,8 @@ def model_config_from_settings(settings: Settings) -> ModelConfig:
     )
 
 
-async def build_host_runtime(cwd: Path) -> HostRuntime:
-    """Build the production Settings, Model catalog, Sessions, and cwd lifetime once."""
+async def build_headless_runtime(cwd: Path) -> HostRuntime:
+    """Build one production runtime with the fail-closed headless approval policy."""
 
     settings = Settings()
     config = model_config_from_settings(settings)
