@@ -1,3 +1,5 @@
+"""把 Run Events 脱敏后写入独立 Trace；Trace 永不用于恢复 Session。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -57,27 +59,36 @@ _UNQUOTED_CREDENTIAL_PATTERN = re.compile(
 
 
 class TraceWriter:
-    """Best-effort redacted JSONL Event consumer for one Session."""
+    """一个 Session 的尽力而为、已脱敏 JSONL Event 消费器。"""
 
     def __init__(self, path: Path) -> None:
+        """绑定 Trace 路径并初始化并发安全的写缓冲。"""
+
         self.path = path
         self._lock = asyncio.Lock()
         self._pending: list[str] = []
 
     async def __call__(self, event: RunEvent) -> None:
+        """序列化 Event，并按流式增量批量或立即落盘。"""
+
         record = serialize_run_event(event)
         line = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         async with self._lock:
             self._pending.append(line)
+            # 高频 Model delta 先成批写入；其他边界 Event 会顺带刷出之前的增量。
             if isinstance(event, ModelCallDelta) and len(self._pending) < _DELTA_BATCH_SIZE:
                 return
             await self._flush_locked()
 
     async def flush(self) -> None:
+        """显式刷出仍在缓冲区中的 Trace 记录。"""
+
         async with self._lock:
             await self._flush_locked()
 
     async def _flush_locked(self) -> None:
+        """在调用方持锁时转移缓冲，并在线程中执行阻塞磁盘写入。"""
+
         if not self._pending:
             return
         lines = tuple(self._pending)
@@ -85,6 +96,8 @@ class TraceWriter:
         await asyncio.to_thread(self._append_sync, lines)
 
     def _append_sync(self, lines: tuple[str, ...]) -> None:
+        """追加一批完整 JSONL 记录并 fsync。"""
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as file:
             for line in lines:
@@ -95,7 +108,7 @@ class TraceWriter:
 
 
 def serialize_run_event(event: RunEvent) -> dict[str, Any]:
-    """Convert one Run Event to the shared redacted Trace/Host record schema."""
+    """把一个 Run Event 转成 Trace/Host 共用的脱敏记录 schema。"""
 
     record: dict[str, Any] = {
         "schema_version": TRACE_SCHEMA_VERSION,
@@ -106,11 +119,14 @@ def serialize_run_event(event: RunEvent) -> dict[str, Any]:
     step_index = getattr(event, "step_index", None)
     if isinstance(step_index, int):
         record["step_index"] = step_index
+    # 先构造语义 payload，再递归脱敏，避免某个 Event 分支遗漏安全边界。
     record["payload"] = _redact(_event_payload(event))
     return record
 
 
 def _event_type(event: RunEvent) -> str:
+    """将类型化 Event 映射成稳定的持久化名称。"""
+
     if isinstance(event, RunStarted):
         return "run_started"
     if isinstance(event, ModelCallStarted):
@@ -131,6 +147,8 @@ def _event_type(event: RunEvent) -> str:
 
 
 def _event_payload(event: RunEvent) -> dict[str, Any]:
+    """提取各 Event 的可序列化观测数据，不包含公共信封字段。"""
+
     if isinstance(event, RunStarted):
         return {}
     if isinstance(event, ModelCallStarted):
@@ -182,6 +200,8 @@ def _event_payload(event: RunEvent) -> dict[str, Any]:
 
 
 def _model_delta(delta: object) -> dict[str, Any]:
+    """把流式 Model delta 归一化为带 discriminator 的字典。"""
+
     if isinstance(delta, ContentDelta):
         return {"delta_type": "content", "content": delta.text}
     if isinstance(delta, ReasoningDelta):
@@ -202,14 +222,20 @@ def _model_delta(delta: object) -> dict[str, Any]:
 
 
 def _tool_call(call: ToolCall) -> dict[str, Any]:
+    """将 Tool Call 投影为 Trace 可序列化字段。"""
+
     return {"id": call.id, "name": call.name, "arguments": call.arguments}
 
 
 def _tool_result(result: ToolResult) -> dict[str, Any]:
+    """将 Tool Result 投影为 Trace 可序列化字段。"""
+
     return {"call_id": result.call_id, "output": result.output, "error": result.error}
 
 
 def _usage(usage: Usage | None) -> dict[str, int | None] | None:
+    """保留 provider 报告的各类 Usage 计数。"""
+
     if usage is None:
         return None
     return {
@@ -222,12 +248,17 @@ def _usage(usage: Usage | None) -> dict[str, int | None] | None:
 
 
 def _error(error: Exception | None) -> dict[str, str] | None:
+    """只记录异常类型与脱敏后的消息，不序列化异常对象。"""
+
     if error is None:
         return None
     return {"type": type(error).__name__, "message": redact_text(str(error))}
 
 
 def _redact(value: Any, *, key: str | None = None) -> Any:
+    """递归遍历 Event payload，并对键名和字符串内容双重脱敏。"""
+
+    # 命中凭据语义的字段整值替换，避免嵌套结构或非字符串值泄漏。
     if key is not None and _is_credential_key(key):
         return "[REDACTED]"
     if isinstance(value, dict):
@@ -242,6 +273,8 @@ def _redact(value: Any, *, key: str | None = None) -> Any:
 
 
 def _is_credential_key(key: str) -> bool:
+    """在统一键名格式后识别常见凭据字段。"""
+
     normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
     return normalized in _CREDENTIAL_KEYS or normalized.endswith(
         ("_api_key", "_password", "_secret", "_token")
@@ -249,8 +282,9 @@ def _is_credential_key(key: str) -> bool:
 
 
 def redact_text(value: str, *, max_length: int | None = _MAX_TEXT_LENGTH) -> str:
-    """Redact credential-shaped values and optionally bound safe user-visible output."""
+    """脱敏形似凭据的文本，并可限制安全可见输出的长度。"""
 
+    # 规则依次覆盖 Bearer、带引号键值、裸键值和常见 sk- 前缀密钥。
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
     redacted = _QUOTED_CREDENTIAL_PATTERN.sub(
         lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]{match.group(2)}",

@@ -1,4 +1,4 @@
-"""Discovery and invocation of Agent Skill instruction resources."""
+"""导出 Agent Skill 指令资源的发现与调用 API。"""
 
 from phi.skills.discovery import discover_skills
 from phi.skills.invocation import (

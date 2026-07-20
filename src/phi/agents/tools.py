@@ -1,3 +1,5 @@
+"""把 AgentRuntime 的 Delegation 操作暴露为 Model 可见 Tools。"""
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -18,8 +20,13 @@ type CheckTimeout = Annotated[
 def build_agent_tools(
     definitions: dict[str, AgentDefinition],
 ) -> tuple[Tool, ...]:
-    """Build the Model-visible Delegation Tool set."""
+    """构建 Model 可见的 Delegation Tool 集合。
 
+    Agent Definition 目录只呈现允许 Model 调用的定义；真正的深度、并发、
+    生命周期与隔离校验仍由 ``AgentRuntime`` 执行。
+    """
+
+    # 稳定排序使 Tool 描述及其进入 Context 后的 token 预算可重复。
     catalog = "\n".join(
         f"- `{definition.name}`: {definition.description}"
         for definition in sorted(definitions.values(), key=lambda item: item.name)
@@ -41,6 +48,8 @@ def build_agent_tools(
         agent_type: NonEmptyText | None = None,
         model: NonEmptyText | None = None,
     ) -> object:
+        """立即启动隔离 Subagent，并返回其 Agent ID。"""
+
         return await runtime.spawn(context, task, agent_type, model)
 
     @tool(
@@ -54,6 +63,8 @@ def build_agent_tools(
         context: Injected[DelegationContext],
         timeout_seconds: CheckTimeout | None = None,
     ) -> object:
+        """读取一个直接 Subagent 的状态，可进行有界等待。"""
+
         return await runtime.check(context, agent_id, timeout_seconds)
 
     @tool(
@@ -66,6 +77,8 @@ def build_agent_tools(
         runtime: Injected[AgentRuntime],
         context: Injected[DelegationContext],
     ) -> object:
+        """把非破坏性消息排入 Subagent 的下一 Step 边界。"""
+
         return await runtime.steer(context, agent_id, message)
 
     @tool(name="list_agents", description="List direct Subagents in deterministic order.")
@@ -73,6 +86,8 @@ def build_agent_tools(
         runtime: Injected[AgentRuntime],
         context: Injected[DelegationContext],
     ) -> object:
+        """按确定顺序列出当前 Agent 的直接 Subagents。"""
+
         return await runtime.list_agents(context)
 
     @tool(name="close_agent", description="Cancel and await a direct Subagent and its descendants.")
@@ -81,6 +96,8 @@ def build_agent_tools(
         runtime: Injected[AgentRuntime],
         context: Injected[DelegationContext],
     ) -> object:
+        """取消并等待一个直接 Subagent 及其后代完成清理。"""
+
         return await runtime.close_agent(context, agent_id)
 
     return spawn_agent, check_agent, steer_agent, list_agents, close_agent

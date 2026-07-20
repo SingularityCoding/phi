@@ -1,4 +1,4 @@
-"""Tool definitions, registration, approval, and dispatch."""
+"""导出 Tool 定义、注册表、审批策略与统一调度边界。"""
 
 from phi.tools.approval import (
     ACCEPT_EDITS_MODE,

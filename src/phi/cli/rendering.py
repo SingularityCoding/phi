@@ -1,3 +1,5 @@
+"""为 Phi CLI 构建安全且适应终端宽度的 Rich 输出。"""
+
 from __future__ import annotations
 
 import json
@@ -35,6 +37,8 @@ _CREDENTIAL_ARGUMENT_NAMES = {
 
 
 def _stream_is_terminal(stream: TextIO) -> bool:
+    """保守判断输出流是否连接到交互式终端。"""
+
     try:
         return stream.isatty()
     except (AttributeError, OSError):
@@ -42,6 +46,8 @@ def _stream_is_terminal(stream: TextIO) -> bool:
 
 
 def _terminal_width() -> int:
+    """读取显式列宽或终端宽度，并保证最低可渲染宽度。"""
+
     columns = os.environ.get("COLUMNS", "").strip()
     if columns:
         try:
@@ -52,8 +58,11 @@ def _terminal_width() -> int:
 
 
 def _console(*, stderr: bool = False) -> Console:
+    """按输出流能力构建禁用 markup 和自动高亮的 Rich Console。"""
+
     stream = sys.stderr if stderr else sys.stdout
     is_terminal = _stream_is_terminal(stream)
+    # 颜色只在真实终端且用户未禁用时开启，管道输出保持稳定纯文本。
     color_enabled = (
         is_terminal
         and "NO_COLOR" not in os.environ
@@ -71,6 +80,8 @@ def _console(*, stderr: bool = False) -> Console:
 
 
 def _escape_terminal_controls(value: str) -> str:
+    """保留换行与 Tab，同时转义可操纵终端的其他控制字符。"""
+
     escaped: list[str] = []
     for character in value:
         codepoint = ord(character)
@@ -82,10 +93,14 @@ def _escape_terminal_controls(value: str) -> str:
 
 
 def _literal_text(value: str, *, style: str | None = None) -> Text:
+    """把外部文本包装为不会解释 Rich markup 的安全 Text。"""
+
     return Text(_escape_terminal_controls(value), style=style or "")
 
 
 def _redact_mcp_text(value: str, secrets: Sequence[str]) -> str:
+    """按已知环境值和凭证赋值模式脱敏一段 MCP 文本。"""
+
     for secret in secrets:
         value = value.replace(secret, "[REDACTED]")
     redacted = redact_text(value, max_length=None)
@@ -93,6 +108,8 @@ def _redact_mcp_text(value: str, secrets: Sequence[str]) -> str:
 
 
 def _is_credential_argument_name(value: str) -> bool:
+    """识别常见凭证参数名及其带前缀变体。"""
+
     normalized = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
     return normalized in _CREDENTIAL_ARGUMENT_NAMES or normalized.endswith(
         ("_api_key", "_password", "_secret", "_token")
@@ -100,6 +117,8 @@ def _is_credential_argument_name(value: str) -> bool:
 
 
 def _redact_credential_assignment(value: str) -> str | None:
+    """若参数形如凭证赋值，则保留名称并隐藏其值。"""
+
     for separator in ("=", ":"):
         name, found, _ = value.partition(separator)
         if found and _is_credential_argument_name(name):
@@ -108,9 +127,12 @@ def _redact_credential_assignment(value: str) -> str | None:
 
 
 def _redact_mcp_arguments(arguments: Sequence[str], secrets: Sequence[str]) -> str:
+    """脱敏 MCP 参数序列，并用 shell 可读形式重新组合。"""
+
     redacted: list[str] = []
     redact_next = False
     for argument in arguments:
+        # ``--token VALUE`` 这类分离参数需要在识别名称后连带隐藏下一项。
         if redact_next:
             redacted.append("[REDACTED]")
             redact_next = False
@@ -129,6 +151,8 @@ def _render_narrow_records(
     noun: str,
     records: Sequence[Sequence[tuple[str, str, str | None]]],
 ) -> None:
+    """在窄终端中把表格记录纵向展开为可折行字段。"""
+
     console.print(Text(title, style="bold cyan"))
     for index, fields in enumerate(records, start=1):
         if index > 1:
@@ -145,12 +169,16 @@ def _render_narrow_records(
 
 
 def render_empty_sessions() -> None:
+    """显示确定的空 Session 列表状态。"""
+
     console = _console()
     console.print(Text("Sessions (0)", style="bold cyan"))
     console.print(Text("No Sessions found.", style="dim"))
 
 
 def render_sessions(handles: Sequence[SessionHandle]) -> None:
+    """按终端宽度把 Session handle 渲染为纵向记录或宽表格。"""
+
     console = _console()
     records = [
         (
@@ -163,6 +191,7 @@ def render_sessions(handles: Sequence[SessionHandle]) -> None:
         )
         for handle in handles
     ]
+    # 数据先统一成 records，再选择布局，保证宽窄模式展示同一组字段。
     if console.width < _NARROW_RECORD_WIDTH:
         _render_narrow_records(
             console,
@@ -189,6 +218,9 @@ def render_sessions(handles: Sequence[SessionHandle]) -> None:
 
 
 def render_session_fork(session_id: str, parent_session_id: str, fork_point_entry_id: str) -> None:
+    """以脚本友好文本或交互式 Panel 显示 Fork 结果。"""
+
+    # 非终端输出保持固定 key=value 契约，不让 Rich 布局影响脚本消费。
     if not _stream_is_terminal(sys.stdout):
         sys.stdout.write(
             f"session_id={session_id}\n"
@@ -218,6 +250,8 @@ def render_mcp_servers(
     *,
     global_only: bool,
 ) -> None:
+    """显示脱敏后的有效或用户级 MCP server 配置。"""
+
     console = _console()
     scope = "global" if global_only else "effective (project overrides global)"
     console.print(Text(f"Scope: {scope}", style="dim cyan"))
@@ -226,6 +260,7 @@ def render_mcp_servers(
         console.print(Text("No MCP servers configured.", style="dim"))
         return
 
+    # 只展示环境变量名称；值仅用于从命令和参数中清除可能泄漏的 secret。
     records: list[tuple[tuple[str, str, str | None], ...]] = []
     for server in servers:
         config = server.config
@@ -289,6 +324,8 @@ _DOCTOR_STATUS_STYLES = {
 
 @contextmanager
 def doctor_progress(*, enabled: bool) -> Iterator[None]:
+    """仅在交互终端中临时显示 doctor spinner。"""
+
     console = _console()
     if not enabled or not _stream_is_terminal(sys.stdout):
         yield
@@ -298,6 +335,8 @@ def doctor_progress(*, enabled: bool) -> Iterator[None]:
 
 
 def render_doctor(report: DoctorReport, *, verbose: bool) -> None:
+    """按分区渲染 doctor 报告、统计摘要和就绪结论。"""
+
     console = _console()
     console.print(Text("Phi doctor", style="bold cyan"))
     mode = (
@@ -307,6 +346,7 @@ def render_doctor(report: DoctorReport, *, verbose: bool) -> None:
     )
     console.print(Text(mode, style="dim"))
 
+    # 环境事实只在 verbose 模式显示，默认输出聚焦可操作检查结果。
     if verbose:
         console.print()
         facts = Table.grid(padding=(0, 2))
@@ -316,6 +356,7 @@ def render_doctor(report: DoctorReport, *, verbose: bool) -> None:
             facts.add_row(_doctor_fact_label(name), _literal_text(value))
         console.print(facts)
 
+    # 枚举顺序是稳定的信息架构，不按动态状态重排分区。
     for section in DoctorSection:
         checks = tuple(check for check in report.checks if check.section is section)
         if not checks:
@@ -328,6 +369,7 @@ def render_doctor(report: DoctorReport, *, verbose: bool) -> None:
             _render_wide_doctor_checks(console, checks, verbose=verbose)
 
     console.print()
+    # FAIL 优先于 WARN 决定总结颜色；WARN 不会把健康报告变成失败。
     summary_style = "bold red" if not report.healthy else "bold green"
     if report.counts[DoctorStatus.WARN] and report.healthy:
         summary_style = "bold yellow"
@@ -352,6 +394,8 @@ def _render_wide_doctor_checks(
     *,
     verbose: bool,
 ) -> None:
+    """在宽终端中以三列网格渲染 doctor 检查。"""
+
     table = Table.grid(expand=True, padding=(0, 2))
     table.add_column(width=6, no_wrap=True)
     table.add_column(width=27, style="bold", overflow="fold")
@@ -365,6 +409,7 @@ def _render_wide_doctor_checks(
             _literal_text(check.title),
             _literal_text(summary),
         )
+        # 默认隐藏成功详情，失败/警告详情始终保留；verbose 展示全部。
         if check.status is not DoctorStatus.PASS or verbose:
             for detail in check.details:
                 table.add_row("", "", _literal_text(detail, style=_doctor_detail_style(check)))
@@ -386,6 +431,8 @@ def _render_narrow_doctor_checks(
     *,
     verbose: bool,
 ) -> None:
+    """在窄终端中逐项纵向渲染 doctor 检查。"""
+
     for index, check in enumerate(checks):
         if index:
             console.print()
@@ -417,6 +464,8 @@ def _render_narrow_doctor_checks(
 
 
 def _doctor_detail_style(check: DoctorCheck) -> str:
+    """根据检查状态选择详情文本的语义颜色。"""
+
     if check.status is DoctorStatus.FAIL:
         return "red"
     if check.status in {DoctorStatus.WARN, DoctorStatus.SKIP}:
@@ -425,6 +474,8 @@ def _doctor_detail_style(check: DoctorCheck) -> str:
 
 
 def _doctor_summary(report: DoctorReport) -> str:
+    """按严重度顺序生成带正确单复数的检查计数。"""
+
     labels = {
         DoctorStatus.FAIL: ("failure", "failures"),
         DoctorStatus.WARN: ("warning", "warnings"),
@@ -441,6 +492,8 @@ def _doctor_summary(report: DoctorReport) -> str:
 
 
 def _doctor_fact_label(name: str) -> str:
+    """把 doctor 环境字段映射为面向用户的标签。"""
+
     labels = {
         "phi_version": "Phi",
         "python_version": "Python",
@@ -452,10 +505,14 @@ def _doctor_fact_label(name: str) -> str:
 
 
 def _known_value(value: int | None) -> str:
+    """诚实显示已知整数，未知值不编造默认数。"""
+
     return "unknown" if value is None else str(value)
 
 
 def _json_syntax(value: object) -> Syntax:
+    """把对象编码成可折行 JSON Syntax，并转义 C1 控制字符。"""
+
     source = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
     source = "".join(
         f"\\u{ord(character):04x}" if 127 <= ord(character) <= 159 else character
@@ -471,6 +528,8 @@ def _json_syntax(value: object) -> Syntax:
 
 
 def _message_label(message: dict[str, object]) -> tuple[str, str]:
+    """按 Model 可见消息角色选择语义标签与边框颜色。"""
+
     role = message.get("role")
     if role == "tool":
         return "Tool Result", "yellow"
@@ -484,11 +543,14 @@ def _message_label(message: dict[str, object]) -> tuple[str, str]:
 
 
 def render_context(outcome: ContextCommandOutcome) -> None:
+    """分块展示 Session、Context 来源和完整 Model 可见内容。"""
+
     console = _console()
     inspection = outcome.inspection
     context = inspection.context
     metadata = outcome.handle.metadata
 
+    # Overview 只给出方向和容量来源；完整内容随后逐块展开，避免混淆层级。
     overview = Table.grid()
     overview.add_column(overflow="fold")
     overview.add_row(
@@ -525,6 +587,7 @@ def render_context(outcome: ContextCommandOutcome) -> None:
     )
     console.print(Panel(overview, title=Text("Overview", style="bold cyan"), border_style="cyan"))
 
+    # 稳定指令与 Tool schemas 是每次请求的独立输入来源，分别呈现。
     console.print(
         Panel(
             _literal_text(context.system_prompt),
@@ -540,6 +603,7 @@ def render_context(outcome: ContextCommandOutcome) -> None:
         )
     )
 
+    # 每条消息保持精确 JSON 结构，Tool Call/Result 不退化为普通聊天文本。
     console.print(Text(f"Messages ({len(context.messages)})", style="bold cyan"))
     for index, message in enumerate(context.messages, start=1):
         label, style = _message_label(message)
@@ -551,6 +615,7 @@ def render_context(outcome: ContextCommandOutcome) -> None:
             )
         )
 
+    # Compaction 摘要和字符计数属于检查元数据，不伪装成 Conversation View 消息。
     console.print(
         Panel(
             _literal_text(context.dropped_summary or "(none)"),
@@ -568,24 +633,36 @@ def render_context(outcome: ContextCommandOutcome) -> None:
 
 
 def render_error(message: str) -> None:
+    """把一般操作错误写入 stderr。"""
+
     _console(stderr=True).print(Text.assemble(("error: ", "bold red"), _literal_text(message)))
 
 
 def render_warning(message: str) -> None:
+    """把非致命诊断写入 stderr。"""
+
     _console(stderr=True).print(Text.assemble(("warning: ", "bold yellow"), _literal_text(message)))
 
 
 def render_confirmation(message: str) -> None:
+    """把成功确认写入 stdout。"""
+
     _console().print(_literal_text(message, style="green"))
 
 
 def render_failure(message: str) -> None:
+    """以失败样式写入 stderr。"""
+
     _console(stderr=True).print(_literal_text(message, style="bold red"))
 
 
 def render_exhausted(message: str) -> None:
+    """以 Step 预算耗尽样式写入 stderr。"""
+
     _console(stderr=True).print(_literal_text(message, style="bold yellow"))
 
 
 def render_cancelled(message: str) -> None:
+    """以取消样式写入 stderr。"""
+
     _console(stderr=True).print(_literal_text(message, style="yellow"))

@@ -1,3 +1,5 @@
+"""从 ``PHI_`` 环境变量和 ``.env`` 加载不可变运行时设置。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +11,7 @@ from phi.harness.compaction import CompactionSettings
 
 
 class Settings(BaseSettings):
-    """phi's model-provider config — an OpenAI-compatible litellm proxy."""
+    """Phi 的 Model gateway、Session 与 Context Compaction 配置。"""
 
     model_config = SettingsConfigDict(
         env_prefix="PHI_",
@@ -32,6 +34,8 @@ class Settings(BaseSettings):
 
     @property
     def compaction(self) -> CompactionSettings:
+        """把应用配置投影为 Harness 使用的 Compaction 策略值。"""
+
         return CompactionSettings(
             enabled=self.compaction_enabled,
             reserve_tokens=self.compaction_reserve_tokens,

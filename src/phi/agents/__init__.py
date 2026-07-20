@@ -1,4 +1,4 @@
-"""Agent Definitions, Delegation Tools, and cwd-scoped Subagent lifetimes."""
+"""导出 Agent Definitions、Delegation Tools 与 cwd 作用域的 Subagent 生命周期。"""
 
 from phi.agents.definition import (
     DEFAULT_AGENT_DEFINITION,

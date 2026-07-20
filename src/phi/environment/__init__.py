@@ -1,4 +1,4 @@
-"""Environment protocols and workspace-confined file operations."""
+"""导出 Environment 协议、结果类型与工作区受限的本地实现。"""
 
 from phi.environment.confined import (
     DEFAULT_PROTECTED_PATTERNS,

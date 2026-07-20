@@ -1,3 +1,5 @@
+"""通过受限 FileSystem 实现确定性的目录遍历、路径匹配和文本搜索。"""
+
 from __future__ import annotations
 
 import re
@@ -20,11 +22,14 @@ async def _walk(
     filesystem: FileSystem,
     path: str,
 ) -> tuple[list[DirectoryEntry], ToolFailure | None]:
+    """深度优先遍历目录，并用规范路径避免符号链接形成环。"""
+
     entries: list[DirectoryEntry] = []
     pending = [path]
     visited_directories: set[str] = set()
     while pending:
         directory = pending.pop()
+        # canonical_path 既执行 confinement 校验，也为去重提供稳定身份。
         canonical = await filesystem.canonical_path(directory)
         if isinstance(canonical, FileError):
             return [], _file_failure(canonical)
@@ -37,6 +42,7 @@ async def _walk(
         if isinstance(listed, FileError):
             return [], _file_failure(listed)
         entries.extend(listed)
+        # reversed 配合栈，使实际遍历仍遵循 list_dir 的正向稳定顺序。
         pending.extend(entry.path for entry in reversed(listed) if entry.is_directory)
     return entries, None
 
@@ -45,9 +51,12 @@ async def _files_under(
     filesystem: FileSystem,
     path: str,
 ) -> tuple[list[str], ToolFailure | None]:
+    """把文件或目录输入统一展开为待搜索的文件路径列表。"""
+
     listed = await filesystem.list_dir(path)
     if isinstance(listed, FileError):
         if listed.code is FileErrorCode.NOT_A_DIRECTORY:
+            # list_dir 的“非目录”同时承担区分单文件输入的作用。
             canonical = await filesystem.canonical_path(path)
             if isinstance(canonical, FileError):
                 return [], _file_failure(canonical)
@@ -70,6 +79,8 @@ async def find_paths(
     path: str = ".",
     limit: Annotated[int, Field(gt=0)] = FIND_DEFAULT_LIMIT,
 ) -> str | ToolFailure:
+    """在工作区目录树中查找匹配 glob 的路径。"""
+
     entries, failure = await _walk(filesystem, path)
     if failure is not None:
         return failure
@@ -87,6 +98,8 @@ async def list_directory(
     path: str = ".",
     limit: Annotated[int, Field(gt=0)] = LS_DEFAULT_LIMIT,
 ) -> str | ToolFailure:
+    """列出目录的直接子项，并用尾斜杠标记子目录。"""
+
     entries = await filesystem.list_dir(path)
     if isinstance(entries, FileError):
         return _file_failure(entries)
@@ -108,6 +121,8 @@ async def grep_files(
     context: Annotated[int, Field(ge=0)] = 0,
     limit: Annotated[int, Field(gt=0)] = GREP_DEFAULT_LIMIT,
 ) -> str | ToolFailure:
+    """搜索文本文件，并按匹配条数而非渲染行数执行上限。"""
+
     try:
         expression = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
     except re.error as exc:
@@ -127,6 +142,7 @@ async def grep_files(
             return _file_failure(content)
         lines = content.splitlines()
         matching_lines = [index for index, line in enumerate(lines) if expression.search(line)]
+        # context 行不消耗 limit；只截取当前还可接受的真正匹配行。
         selected = matching_lines[: limit - matches_used]
         if not selected:
             continue
@@ -134,10 +150,12 @@ async def grep_files(
         selected_set = set(selected)
         rendered_indexes: set[int] = set()
         for index in selected:
+            # 用集合合并相邻匹配的重叠上下文，避免同一行重复输出。
             rendered_indexes.update(
                 range(max(0, index - context), min(len(lines), index + context + 1))
             )
         for index in sorted(rendered_indexes):
+            # 冒号表示命中行，连字符表示仅作为上下文展示的行。
             separator = ":" if index in selected_set else "-"
             rendered.append(f"{file_path}{separator}{index + 1}{separator}{lines[index]}")
         if matches_used == limit:

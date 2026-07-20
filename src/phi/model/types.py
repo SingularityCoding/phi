@@ -1,3 +1,5 @@
+"""定义 Model 边界内部使用的可信、传输无关值对象。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,7 +10,7 @@ from pydantic import SecretStr
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Trusted configuration required by an OpenAI-compatible Model."""
+    """保存 OpenAI 兼容 Model 所需的可信配置。"""
 
     base_url: str
     api_key: SecretStr
@@ -18,7 +20,7 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class ModelRequest:
-    """One stateless request sent to a Model."""
+    """表示发送给 Model 的一次无状态请求。"""
 
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] = field(default_factory=list)
@@ -29,7 +31,7 @@ class ModelRequest:
 
 @dataclass(frozen=True)
 class ToolCall:
-    """A Tool Call proposed by a Model with normalized arguments."""
+    """表示 Model 提议且参数已归一化的 Tool Call。"""
 
     id: str
     name: str
@@ -38,7 +40,7 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class ToolResult:
-    """The Harness-produced outcome of processing a Tool Call."""
+    """表示 Harness 处理 Tool Call 后产生的 Tool Result。"""
 
     call_id: str
     output: str
@@ -47,7 +49,7 @@ class ToolResult:
 
 @dataclass(frozen=True)
 class Usage:
-    """Provider-reported token counts for one completed Model request."""
+    """保存提供方为一次已完成 Model 请求报告的 token 计数。"""
 
     prompt_tokens: int
     completion_tokens: int
@@ -58,7 +60,7 @@ class Usage:
 
 @dataclass(frozen=True)
 class ModelResponse:
-    """The transport-independent result of one Model request."""
+    """表示一次 Model 请求的传输无关结果。"""
 
     content: str | None = None
     reasoning: str | None = None
@@ -70,7 +72,7 @@ class ModelResponse:
 
 @dataclass(frozen=True)
 class ModelInfo:
-    """Trustworthy metadata for a Model available through the Proxy."""
+    """保存 Proxy 所暴露 Model 的可信元数据。"""
 
     id: str
     max_input_tokens: int | None = None

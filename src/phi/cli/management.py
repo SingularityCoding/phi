@@ -1,3 +1,5 @@
+"""CLI 的 Session 选择与只读 Context 检查编排。"""
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -18,7 +20,7 @@ from phi.sessions import (
 
 
 class ContextSelectionError(ValueError):
-    """A Context inspection target or effective Model could not be resolved."""
+    """表示无法解析 Context 检查目标或有效 Model。"""
 
 
 type RuntimeFactory = Callable[[Path], Awaitable[HostRuntime]]
@@ -26,12 +28,17 @@ type RuntimeFactory = Callable[[Path], Awaitable[HostRuntime]]
 
 @dataclass(frozen=True)
 class ContextCommandOutcome:
+    """保存 Context 命令渲染和 JSON 输出所需的不可变快照。"""
+
     handle: SessionHandle
     model_id: str
     inspection: ContextInspection
     diagnostics: tuple[str, ...]
 
     def to_document(self) -> dict[str, Any]:
+        """把检查结果投影为稳定、可机器读取的版本化文档。"""
+
+        # 显式列出公开字段，避免把内部 dataclass/Pydantic 序列化细节变成 CLI 契约。
         context = self.inspection.context
         request = self.inspection.request
         metadata = self.handle.metadata
@@ -77,13 +84,14 @@ async def select_context_session(
     storage: SessionStorage,
     session_id: str | None,
 ) -> SessionHandle:
-    """Select an explicit Session or the deterministic most-recent Session."""
+    """选择显式 Session，或确定性地选择最近更新的 Session。"""
 
     if session_id is not None:
         return await resume_session(storage, session_id)
     handles = await list_session_handles(storage)
     if not handles:
         raise ContextSelectionError("No Sessions found; pass --session after creating one")
+    # Session ID 作为更新时间相同情况下的稳定次级排序键。
     return max(handles, key=lambda handle: (handle.metadata.updated_at, handle.session_id))
 
 
@@ -93,12 +101,13 @@ async def execute_context_inspection(
     runtime_factory: RuntimeFactory,
     selected_session: SessionHandle,
 ) -> ContextCommandOutcome:
-    """Build the same cwd-scoped Context as a Run without invoking the Model."""
+    """构建 Run 将使用的同一 cwd 级 Context，但不调用 Model。"""
 
     runtime = await runtime_factory(cwd)
     if not isinstance(runtime, HostRuntime):
         raise TypeError("runtime factory must return HostRuntime")
     try:
+        # 在 runtime 自己的 storage 上重新恢复，确保检查的是该 cwd 运行时看到的最新 handle。
         handle = await resume_session(runtime.storage, selected_session.session_id)
         model_id, model_info = resolve_available_model(
             handle.metadata.model,
@@ -108,6 +117,7 @@ async def execute_context_inspection(
                 "no Model was selected; configure PHI_DEFAULT_MODEL or select a branch Model"
             ),
         )
+        # 共享检查服务冻结 Conversation View、Context 和规范化 ModelRequest。
         inspection = await inspect_context(
             runtime.storage,
             handle,
@@ -116,6 +126,7 @@ async def execute_context_inspection(
             tools=runtime.resources.tools,
             instructions=runtime.resources.instruction_assembly,
         )
+        # 按发现顺序合并各层诊断，同时保持一次输出只出现一次。
         diagnostics = tuple(
             dict.fromkeys(
                 str(item)
@@ -129,4 +140,5 @@ async def execute_context_inspection(
         )
         return ContextCommandOutcome(handle, model_id, inspection, diagnostics)
     finally:
+        # Context 命令虽不调用 Model，仍可能构建需显式关闭的 cwd 级资源。
         await runtime.close()

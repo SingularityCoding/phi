@@ -1,3 +1,5 @@
+"""组合 Session 持久化、Conversation View、Context 构造与 Harness Run。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -76,6 +78,8 @@ from phi.tools import ToolDispatcher, ToolRegistry
 
 @dataclass(frozen=True)
 class SessionHandle:
+    """Host 持有的不可变 Session 游标及仅限运行时的预算信息。"""
+
     session_id: str
     leaf_id: str | None
     session_file: Path
@@ -87,6 +91,8 @@ class SessionHandle:
 
 @dataclass(frozen=True)
 class ConversationView:
+    """沿 Session Entry 树一条路径物化出的对话与有效设置。"""
+
     session_id: str
     leaf_id: str | None
     entries: tuple[Entry, ...]
@@ -96,7 +102,7 @@ class ConversationView:
 
 @dataclass(frozen=True)
 class SessionPresentation:
-    """Read-only complete selected path for Host presentation and navigation."""
+    """供 Host 展示与导航使用的只读完整选定路径。"""
 
     session_id: str
     leaf_id: str | None
@@ -105,7 +111,7 @@ class SessionPresentation:
 
 @dataclass(frozen=True)
 class RunInvocation:
-    """Dependencies bound to one exact Harness Run for lifecycle extensions."""
+    """绑定到一次确切 Harness Run、供生命周期扩展使用的依赖集合。"""
 
     run_id: str
     session_id: str
@@ -122,23 +128,31 @@ class RunInvocation:
 
 
 class RunLifecycle(Protocol):
-    """Generic service-boundary interception for exact Run lifetime ownership."""
+    """在服务边界拦截一次确切 Run 生命周期的通用协议。"""
 
     async def before_run(
         self,
         invocation: RunInvocation,
         context: object | None,
-    ) -> Mapping[str, object]: ...
+    ) -> Mapping[str, object]:
+        """进入 Run 前返回注入 ToolDispatcher 的可信运行时值。"""
+
+        ...
 
     async def after_run(
         self,
         invocation: RunInvocation,
         context: object | None,
-    ) -> None: ...
+    ) -> None:
+        """Run 结束后清理属于该 Run 的资源。"""
+
+        ...
 
 
 @dataclass
 class _ObservedStep:
+    """从 Events 逐步拼装、尚未确认可持久化的 Step。"""
+
     index: int
     request: ModelRequest | None = None
     response: ModelResponse | None = None
@@ -147,19 +161,25 @@ class _ObservedStep:
 
 @dataclass
 class _ActiveSend:
+    """在可取消发送期间跟踪最新 SessionHandle 与当前 Run ID。"""
+
     handle: SessionHandle
     run_id: str | None = None
 
 
 class _RunEventBoundary:
-    """Hold terminal notifications until Session-owned lifecycle cleanup finishes."""
+    """在 Session 所属生命周期清理完成前暂存终止通知。"""
 
     def __init__(self, event_bus: EventBus[RunEvent]) -> None:
+        """包装底层 EventBus，并初始化每个 Run 的终止状态。"""
+
         self._event_bus = event_bus
         self._terminal_events: dict[str, RunFinished] = {}
         self._next_indexes: dict[str, int] = {}
 
     async def emit(self, event: RunEvent) -> None:
+        """立即转发普通 Event，但暂存 ``RunFinished``。"""
+
         self._next_indexes[event.run_id] = event.event_index + 1
         if isinstance(event, RunFinished):
             self._terminal_events[event.run_id] = event
@@ -167,12 +187,16 @@ class _RunEventBoundary:
         await self._event_bus.emit(event)
 
     async def finish(self, run_id: str) -> None:
+        """生命周期清理成功后发布原始终止 Event。"""
+
         event = self._terminal_events.pop(run_id, None)
         if event is not None:
             await self._event_bus.emit(event)
         self._next_indexes.pop(run_id, None)
 
     async def cancel(self, run_id: str, result: RunResult) -> None:
+        """取消时以正确的后续索引发布合成终止 Event。"""
+
         pending = self._terminal_events.pop(run_id, None)
         next_index = self._next_indexes.pop(run_id, None)
         if pending is None and next_index is None:
@@ -183,11 +207,17 @@ class _RunEventBoundary:
 
 
 class _SafeStepRecorder:
+    """从 Event 流恢复取消时仍能安全持久化的完整 Steps。"""
+
     def __init__(self) -> None:
+        """初始化按 Run 与 Step 索引组织的观察状态。"""
+
         self._run_order: list[str] = []
         self._steps: dict[tuple[str, int], _ObservedStep] = {}
 
     def __call__(self, event: RunEvent) -> None:
+        """消费 Model/Tool 边界 Events，逐步补全 Step。"""
+
         if event.run_id not in self._run_order:
             self._run_order.append(event.run_id)
         if isinstance(event, ModelCallStarted):
@@ -205,6 +235,8 @@ class _SafeStepRecorder:
             observed.tool_results.append(event.result)
 
     def safe_steps(self) -> tuple[Step, ...]:
+        """返回按 Run 顺序排列、Tool Call/Result 完整匹配的连续 Steps。"""
+
         safe: list[Step] = []
         for run_id in self._run_order:
             observed_steps = sorted(
@@ -216,6 +248,7 @@ class _SafeStepRecorder:
                 key=lambda item: item.index,
             )
             for observed in observed_steps:
+                # 一个 Run 遇到首个不完整 Step 就停止，不能越过缺口拼接后续状态。
                 if observed.request is None or observed.response is None:
                     break
                 results = tuple(observed.tool_results or ())
@@ -224,6 +257,7 @@ class _SafeStepRecorder:
                     len(calls) != len(results)
                     or [call.id for call in calls] != [result.call_id for result in results]
                 ):
+                    # Assistant Tool Calls 与 Tool Results 必须按 call_id 一一对应。
                     break
                 safe.append(
                     Step(
@@ -244,6 +278,11 @@ async def create_session(
     origin: Literal["new", "subagent"] = "new",
     parent_session_id: str | None = None,
 ) -> SessionHandle:
+    """创建普通或隔离 Subagent Session，并返回初始不可变 Handle。
+
+    Subagent Session 只记录父 Session 的 Delegation 谱系，不继承父 Entries。
+    """
+
     if origin == "subagent":
         if parent_session_id is None:
             raise ValueError("Subagent Sessions require a parent Session ID")
@@ -260,6 +299,8 @@ async def create_session(
 
 
 async def resume_session(storage: SessionStorage, session_id: str) -> SessionHandle:
+    """加载、校验并物化指定 Session 的当前分支。"""
+
     state = await storage.load_state(session_id)
     await _session_branch_points(storage, state)
     handle = _handle(
@@ -273,11 +314,13 @@ async def resume_session(storage: SessionStorage, session_id: str) -> SessionHan
 
 
 async def list_sessions(storage: SessionStorage) -> list[SessionMetadata]:
+    """列出经过完整恢复校验的 Session 元数据。"""
+
     return [handle.metadata for handle in await list_session_handles(storage)]
 
 
 async def list_session_handles(storage: SessionStorage) -> list[SessionHandle]:
-    """Load and validate every Session without hiding recovery diagnostics."""
+    """加载并校验每个 Session，且不隐藏恢复诊断。"""
 
     sessions: list[SessionHandle] = []
     for envelope in await storage.list_metadata():
@@ -289,12 +332,15 @@ async def list_leaves(
     storage: SessionStorage,
     handle: SessionHandle,
 ) -> tuple[str, ...]:
+    """列出当前 Session Entry 树中所有本地 leaf。"""
+
     state = await storage.load_state(handle.session_id)
     await _session_branch_points(storage, state)
     if not state.entries:
         fork_point = state.envelope.metadata.fork_point_entry_id
         return (fork_point,) if fork_point is not None else ()
     referenced = {entry.parent_id for entry in state.entries if entry.parent_id is not None}
+    # 未被任何节点作为 parent_id 引用的 Entry 就是树叶。
     return tuple(entry.id for entry in state.entries if entry.id not in referenced)
 
 
@@ -303,6 +349,8 @@ async def switch_leaf(
     handle: SessionHandle,
     entry_id: str,
 ) -> SessionHandle:
+    """把 Session 当前 leaf 切换到一个合法消息边界。"""
+
     state = await storage.load_state(handle.session_id)
     available = {entry.id for entry in state.entries}
     if state.envelope.metadata.fork_point_entry_id is not None:
@@ -328,6 +376,8 @@ async def fork_session(
     model: str | None = None,
     name: str | None = None,
 ) -> SessionHandle:
+    """在选定 Entry 创建引用父历史而不复制前缀的新 Fork Session。"""
+
     state = await storage.load_state(handle.session_id)
     selected_path = await _materialize_path(
         storage,
@@ -352,6 +402,8 @@ async def select_model(
     handle: SessionHandle,
     model: str,
 ) -> SessionHandle:
+    """为 Session 选择 Model；已有本地 Model 输出时通过 Fork 保留历史语义。"""
+
     model = model.strip()
     if not model:
         raise ValueError("selected Model ID must be non-empty")
@@ -366,6 +418,7 @@ async def select_model(
     )
     _validate_path(selected_path, handle.session_id)
     local_entry_ids = {entry.id for entry in state.entries}
+    # 一旦当前 Session 已产生本地 Assistant 输出，原地改 Model 会混淆分支语义。
     if any(
         isinstance(entry, AssistantMessageEntry) and entry.id in local_entry_ids
         for entry in selected_path
@@ -392,6 +445,8 @@ async def rename_session(
     handle: SessionHandle,
     name: str | None,
 ) -> SessionHandle:
+    """更新 Session 展示名称，同时保留仍有效的运行时预算锚点。"""
+
     if name is not None:
         name = name.strip()
         if not name:
@@ -412,6 +467,8 @@ async def materialize_conversation(
     storage: SessionStorage,
     handle: SessionHandle,
 ) -> ConversationView:
+    """从当前 leaf 物化有限 Context 之前的 Conversation View。"""
+
     presentation = await materialize_presentation(storage, handle)
     return _conversation_view_from_path(handle, presentation.entries)
 
@@ -420,12 +477,15 @@ def _conversation_view_from_path(
     handle: SessionHandle,
     path: tuple[Entry, ...],
 ) -> ConversationView:
+    """将完整 Entry 路径投影成应用最近 Compaction 后的 Conversation View。"""
+
     dropped_summary: str | None = None
     visible: tuple[Entry, ...] = path
     compaction_indexes = [
         index for index, entry in enumerate(path) if isinstance(entry, CompactionEntry)
     ]
     if compaction_indexes:
+        # 最新 Compaction 覆盖更早摘要；未来 Context 从其摘要和保留后缀开始。
         compaction_index = compaction_indexes[-1]
         compaction = path[compaction_index]
         assert isinstance(compaction, CompactionEntry)
@@ -461,7 +521,7 @@ async def materialize_presentation(
     storage: SessionStorage,
     handle: SessionHandle,
 ) -> SessionPresentation:
-    """Materialize the complete durable selected path without Context filtering."""
+    """物化未经过 Context 过滤的完整持久化选定路径。"""
 
     state = await storage.load_state(handle.session_id)
     path = await _materialize_path(
@@ -483,6 +543,11 @@ async def inspect_context(
     tools: ToolRegistry,
     instructions: InstructionAssembly,
 ) -> ContextInspection:
+    """只读检查 Session 到 ModelRequest 的精确投影与预算。
+
+    此操作不调用 Model、不追加 Entry、不切换 leaf，也不触发 Compaction。
+    """
+
     presentation = await materialize_presentation(storage, handle)
     view = _conversation_view_from_path(handle, presentation.entries)
     context = _context_for_view(view, tools, instructions.stable_instructions)
@@ -497,6 +562,7 @@ async def inspect_context(
     diagnostics: tuple[str, ...] = ()
     safe_limit: int | None = None
     if effective_limit is None:
+        # 未知窗口时只报告 best-effort 估算，不能伪造安全上限。
         diagnostics = ("Model input limit is unknown; proactive Context budgeting is best-effort",)
     else:
         safe_limit = safe_prompt_limit(effective_limit, settings.compaction)
@@ -536,6 +602,8 @@ async def inspect_context(
 
 
 def _inspect_tool(schema: Mapping[str, Any]) -> InspectedTool:
+    """为一个 OpenAI-compatible Tool schema 添加展示元数据。"""
+
     function = schema.get("function")
     function = function if isinstance(function, Mapping) else {}
     name = function.get("name")
@@ -549,6 +617,8 @@ def _inspect_tool(schema: Mapping[str, Any]) -> InspectedTool:
 
 
 def _inspect_message(index: int, message: Mapping[str, Any]) -> InspectedMessage:
+    """按消息语义生成便于 Host 阅读的标签与内容。"""
+
     role = message.get("role")
     if role == "tool":
         label = f"Tool Result {index}"
@@ -570,6 +640,8 @@ def _inspect_message(index: int, message: Mapping[str, Any]) -> InspectedMessage
 
 
 def _readable_message_content(message: Mapping[str, Any]) -> str:
+    """把消息文本及 Tool Calls 展开为人类可读内容。"""
+
     content = message.get("content")
     parts = [content] if isinstance(content, str) and content else []
     tool_calls = message.get("tool_calls")
@@ -589,6 +661,8 @@ def _readable_message_content(message: Mapping[str, Any]) -> str:
 
 
 def _json_characters(value: Mapping[str, Any]) -> int:
+    """按预算使用的紧凑 UTF-8 JSON 形状统计字符数。"""
+
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
@@ -603,6 +677,8 @@ async def manual_compact(
     stable_instructions: str,
     focus: str | None = None,
 ) -> SessionHandle:
+    """按可选关注点手动 Compaction 当前 Conversation View。"""
+
     return await _compact(
         handle,
         storage=storage,
@@ -633,6 +709,12 @@ async def send_message(
     lifecycle: RunLifecycle | None = None,
     lifecycle_context: object | None = None,
 ) -> tuple[SessionHandle, RunResult]:
+    """持久化用户消息，构建 Context，执行一次 Run 并提交完整 Steps。
+
+    该服务是 Session 与 Harness 的组合边界：负责阈值 Compaction、一次有界溢出
+    重试、Trace 记录以及取消时安全 Step 的持久化。
+    """
+
     if not text.strip():
         raise ValueError("User messages must not be empty")
     if handle.metadata.model is None and settings.default_model:
@@ -640,6 +722,7 @@ async def send_message(
     await materialize_conversation(storage, handle)
     selected_model = handle.metadata.model or settings.default_model or None
     user_entry = UserMessageEntry(parent_id=handle.leaf_id, content=text)
+    # 用户消息在 Model 调用前先持久化，保证失败或取消后仍能恢复请求分支。
     handle = await _append(
         storage,
         handle,
@@ -667,6 +750,7 @@ async def send_message(
             lifecycle_context=lifecycle_context,
         )
     except asyncio.CancelledError:
+        # Harness 已完成的原子 Steps 仍是有效对话历史；从 Event 记录器中安全恢复。
         cancelled_handle, result = await _cancelled_result(
             storage,
             active.handle,
@@ -696,6 +780,8 @@ async def _continue_send(
     lifecycle: RunLifecycle | None,
     lifecycle_context: object | None,
 ) -> tuple[SessionHandle, RunResult]:
+    """完成阈值预算、Harness 执行、溢出恢复与结果持久化。"""
+
     handle = active.handle
     inspection_instructions = InstructionAssembly.from_prompt(stable_instructions)
     inspection = await inspect_context(
@@ -711,6 +797,7 @@ async def _continue_send(
     policy = settings.compaction
     effective_limit = effective_input_limit(model_info, policy)
     if effective_limit is None:
+        # 未知输入窗口时不能声称主动预算安全，只保留诊断并让 provider 决定。
         handle = _with_runtime(
             handle,
             prompt_budget_anchor=handle.prompt_budget_anchor,
@@ -728,6 +815,7 @@ async def _continue_send(
             anchor=handle.prompt_budget_anchor,
         )
         if should_compact(estimate.tokens, safe_limit, policy):
+            # 每次 send_message 最多进行一次阈值 Compaction，避免不可收敛循环。
             try:
                 handle = await _compact(
                     handle,
@@ -760,6 +848,7 @@ async def _continue_send(
                 model_id=selected_model or "<unresolved>",
             )
             if rebuilt.tokens > safe_limit:
+                # 稳定指令、Tools 或强制保留后缀过大时，继续摘要也无法解决容量问题。
                 raise ContextCapacityError(
                     "Context remains over the safe prompt limit after one compaction"
                 )
@@ -793,6 +882,7 @@ async def _continue_send(
         and isinstance(result.error, ModelContextLimitError)
         and not any(step.tool_results for step in result.steps)
     ):
+        # 仅在尚未 Compaction 且没有 Tool 副作用时，允许一次 provider 溢出恢复。
         try:
             handle = await _compact(
                 handle,
@@ -820,6 +910,7 @@ async def _continue_send(
         )
         retry_request = retry_inspection.context.to_request(model=selected_model)
         retry_invocation = replace(invocation, run_id=str(uuid4()))
+        # 重试是新的 Run，拥有独立 Events 与生命周期所有权。
         active.run_id = retry_invocation.run_id
         result = await _execute_run(
             retry_request,
@@ -830,6 +921,7 @@ async def _continue_send(
         )
 
     completed_entries = _entries_from_steps(handle.leaf_id, result)
+    # 只把完整 Step 拆成 Entries；失败 Run 的不完整尾部不会污染 Session 树。
     if completed_entries:
         handle = await _append(storage, handle, completed_entries)
         active.handle = handle
@@ -857,9 +949,12 @@ async def _execute_run(
     lifecycle: RunLifecycle | None,
     lifecycle_context: object | None,
 ) -> RunResult:
+    """在生命周期扩展包围下执行 Harness Run，并延后终止 Event。"""
+
     trusted_tool_values: Mapping[str, object] = {}
     entered = False
     if lifecycle is not None:
+        # 生命周期可注入 DelegationContext 等可信值，而不会暴露给 Model 参数。
         trusted_tool_values = await lifecycle.before_run(invocation, lifecycle_context)
         entered = True
     try:
@@ -875,6 +970,7 @@ async def _execute_run(
         )
     finally:
         if entered:
+            # 无论 Run 正常、失败或取消，都先清理其所有权资源。
             assert lifecycle is not None
             await lifecycle.after_run(invocation, lifecycle_context)
     await run_events.finish(invocation.run_id)
@@ -888,6 +984,8 @@ def _handle(
     *,
     diagnostics: tuple[str, ...] = (),
 ) -> SessionHandle:
+    """从持久元数据构造不携带预算锚点的 SessionHandle。"""
+
     return SessionHandle(
         session_id=metadata.id,
         leaf_id=metadata.leaf_id,
@@ -905,6 +1003,8 @@ async def _append(
     *,
     prompt_budget_anchor: PromptBudgetAnchor | None = None,
 ) -> SessionHandle:
+    """把一批相连 Entries 提交到当前 leaf，并返回新 revision Handle。"""
+
     metadata = handle.metadata.model_copy(
         update={
             "leaf_id": entries[-1].id,
@@ -934,6 +1034,8 @@ def _with_runtime(
     prompt_budget_anchor: PromptBudgetAnchor | None,
     diagnostics: tuple[str, ...] | None = None,
 ) -> SessionHandle:
+    """替换 SessionHandle 的非持久化运行时字段。"""
+
     return SessionHandle(
         session_id=handle.session_id,
         leaf_id=handle.leaf_id,
@@ -950,6 +1052,8 @@ def _run_event_bus(
     handle: SessionHandle,
     external: EventEmitter[RunEvent] | None,
 ) -> tuple[_RunEventBoundary, _SafeStepRecorder, TraceWriter]:
+    """组合安全 Step 记录、Trace 与可选外部观察者的 EventBus。"""
+
     recorder = _SafeStepRecorder()
     trace_writer = TraceWriter(storage.trace_path(handle.session_id))
     listeners: list[EventListener[RunEvent]] = [recorder, trace_writer]
@@ -964,9 +1068,12 @@ async def _cancelled_result(
     recorder: _SafeStepRecorder,
     trace_writer: TraceWriter,
 ) -> tuple[SessionHandle, RunResult]:
+    """在取消后刷出 Trace，并持久化 Event 流中已完整结束的 Steps。"""
+
     try:
         await trace_writer.flush()
     except Exception:
+        # Trace 是尽力而为的观测产品，写入失败不能破坏 Conversation Entries。
         pass
     result = RunResult(RunStatus.CANCELLED, recorder.safe_steps())
     entries = _entries_from_steps(handle.leaf_id, result)
@@ -979,6 +1086,8 @@ async def _session_branch_points(
     storage: SessionStorage,
     state: LoadedSession,
 ) -> set[str]:
+    """收集 Session 所有分支中允许选作 leaf/Fork 点的完整消息边界。"""
+
     referenced = {entry.parent_id for entry in state.entries if entry.parent_id is not None}
     local_leaves = [entry.id for entry in state.entries if entry.id not in referenced]
     if not local_leaves and state.envelope.metadata.fork_point_entry_id is not None:
@@ -986,6 +1095,7 @@ async def _session_branch_points(
 
     branch_points: set[str] = set()
     for leaf_id in local_leaves:
+        # 每个 leaf 都可能共享前缀；集合合并得到整棵可导航树的合法边界。
         path = await _materialize_path(
             storage,
             state,
@@ -997,6 +1107,8 @@ async def _session_branch_points(
 
 
 def _validate_path(path: tuple[Entry, ...], session_id: str) -> set[str]:
+    """校验一条 Entry 路径的消息原子性并返回合法分支点。"""
+
     positions = {entry.id: index for index, entry in enumerate(path)}
     unit_starts: set[str] = set()
     branch_points: set[str] = set()
@@ -1016,6 +1128,7 @@ def _validate_path(path: tuple[Entry, ...], session_id: str) -> set[str]:
                 index += 1
                 continue
             expected_ids = [call.id for call in entry.tool_calls]
+            # Assistant Tool Calls 与紧随其后的全部 Tool Results 构成不可分割单元。
             following = path[index + 1 : index + 1 + len(expected_ids)]
             if len(following) != len(expected_ids) or not all(
                 isinstance(item, ToolResultEntry) for item in following
@@ -1034,6 +1147,7 @@ def _validate_path(path: tuple[Entry, ...], session_id: str) -> set[str]:
             index += len(result_entries) + 1
             continue
         if isinstance(entry, ToolResultEntry):
+            # 独立 Tool Result 会破坏 Model wire message 的调用/结果配对。
             raise CorruptSessionError(
                 session_id,
                 "Tool Result is not attached to an Assistant Tool Call group",
@@ -1044,6 +1158,7 @@ def _validate_path(path: tuple[Entry, ...], session_id: str) -> set[str]:
         index += 1
 
     for compaction_index, compaction in compactions:
+        # first_kept 必须指向摘要之前某个完整消息单元的起点。
         first_kept_index = positions.get(compaction.first_kept_entry_id)
         if (
             first_kept_index is None
@@ -1064,6 +1179,8 @@ async def _materialize_path(
     *,
     seen_sessions: set[str],
 ) -> tuple[Entry, ...]:
+    """从 leaf 沿 parent_id 上溯，并在 Fork 边界递归接入父 Session 前缀。"""
+
     metadata = state.envelope.metadata
     if metadata.id in seen_sessions:
         raise SessionLineageCycleError(metadata.id)
@@ -1073,6 +1190,7 @@ async def _materialize_path(
     current_id = leaf_id
     seen_entries: set[str] = set()
     while current_id in by_id:
+        # 本地节点逆向收集，最后反转成从根到 leaf 的阅读顺序。
         if current_id in seen_entries:
             raise SessionLineageCycleError(metadata.id)
         seen_entries.add(current_id)
@@ -1082,6 +1200,7 @@ async def _materialize_path(
 
     prefix: tuple[Entry, ...] = ()
     if current_id is not None:
+        # 只有 Fork 精确命中 fork_point 才能跨 Session 解析外部 parent_id。
         if metadata.origin != "fork" or current_id != metadata.fork_point_entry_id:
             entry_id = local_reversed[-1].id if local_reversed else current_id
             raise MissingEntryParentError(metadata.id, entry_id, current_id)
@@ -1094,6 +1213,7 @@ async def _materialize_path(
             seen_sessions=lineage,
         )
     elif metadata.origin == "fork" and not local_reversed:
+        # 尚无本地 Entry 的 Fork，其完整路径就是父 Session 到 fork point 的路径。
         assert metadata.parent_session_id is not None
         parent = await storage.load_state(metadata.parent_session_id)
         prefix = await _materialize_path(
@@ -1110,8 +1230,11 @@ def _context_for_view(
     tools: ToolRegistry,
     stable_instructions: str,
 ) -> Context:
+    """把类型化 Conversation View Entries 转为 Model 可见 Context。"""
+
     messages: list[dict[str, Any]] = []
     for entry in view.entries:
+        # CompactionEntry 不直接成为消息；其摘要已通过 dropped_summary 单独注入。
         if isinstance(entry, UserMessageEntry):
             messages.append({"role": "user", "content": entry.content})
         elif isinstance(entry, AssistantMessageEntry):
@@ -1146,8 +1269,11 @@ async def _compact(
     focus: str | None,
     pending_entry_id: str | None,
 ) -> SessionHandle:
+    """选择可丢弃原子单元、请求摘要并持久化 CompactionEntry。"""
+
     view = await materialize_conversation(storage, handle)
     units = _atomic_units(view.entries, pending_entry_id=pending_entry_id)
+    # 纯策略层决定 cut；Session 服务只负责树遍历、Model 调用与 Entry 持久化。
     selection = select_compaction_units(
         units,
         stable_instructions=stable_instructions,
@@ -1176,14 +1302,17 @@ async def _compact(
         summary_input_limit is not None
         and estimate_request_tokens(summary_request) > summary_input_limit
     ):
+        # 摘要请求自身也必须适配有效输入窗口，否则不能安全开始 Compaction。
         raise ContextCapacityError("compaction summary request exceeds the effective input limit")
     response = await model.request(summary_request)
+    # 摘要调用不是 Agent Run：不允许 Model 通过 Tool Calls 引入新的控制循环。
     if response.tool_calls or response.content is None or not response.content.strip():
         raise InvalidCompactionSummaryError(
             "compaction summary must contain non-empty text and no Tool Calls"
         )
     summary = response.content.strip()
     if summary_input_limit is not None:
+        # 用真实摘要重建最终请求；空摘要 envelope 的选择估算并不能替代这次复核。
         retained_messages = [
             deepcopy(message) for unit in selection.retained for message in unit.messages
         ]
@@ -1206,6 +1335,7 @@ async def _compact(
         and handle.prompt_budget_anchor.request == ordinary_request
         and estimate.tokens == handle.prompt_budget_anchor.prompt_tokens
     )
+    # 只有锚点精确描述当前普通请求时，tokens_before 才可标记为 provider 数据。
     compaction = CompactionEntry(
         parent_id=handle.leaf_id,
         summary=summary,
@@ -1221,6 +1351,8 @@ def _atomic_units(
     *,
     pending_entry_id: str | None,
 ) -> tuple[AtomicConversationUnit, ...]:
+    """把 Entries 分组成 Compaction 不得拆开的消息原子单元。"""
+
     units: list[AtomicConversationUnit] = []
     index = 0
     while index < len(entries):
@@ -1246,6 +1378,7 @@ def _atomic_units(
                 )
             ]
             if entry.tool_calls:
+                # 一个 Assistant Tool Call 组与其有序 Tool Results 必须整体保留或丢弃。
                 expected = [call.id for call in entry.tool_calls]
                 results: list[ToolResultEntry] = []
                 for following in entries[index + 1 : index + 1 + len(expected)]:
@@ -1267,6 +1400,7 @@ def _atomic_units(
             index += 1
             continue
         if isinstance(entry, ToolResultEntry):
+            # 路径校验本应更早捕获；这里再次失败关闭，防止生成无效 Context。
             raise CorruptSessionError(
                 "<materialized>",
                 "Tool Result is not attached to an Assistant Tool Call group",
@@ -1283,12 +1417,15 @@ def _summary_request(
     model_id: str | None,
     max_tokens: int,
 ) -> ModelRequest:
+    """构造只生成文本摘要、无 Tools 的独立 ModelRequest。"""
+
     parts = [
         "Summarize the dropped conversation faithfully for use as earlier Context.",
     ]
     if focus is not None and focus.strip():
         parts.append(f"User-requested emphasis: {focus.strip()}")
     if previous_summary is not None:
+        # 重新 Compaction 必须连同旧摘要一起概括，否则更早历史会永久丢失。
         parts.append(f"Previous dropped-history summary:\n{previous_summary}")
     dropped_messages = [message for unit in dropped for message in unit.messages]
     parts.append(
@@ -1315,6 +1452,8 @@ def _summary_request(
 
 
 def _entries_from_steps(parent_id: str | None, result: RunResult) -> tuple[Entry, ...]:
+    """把 Run 的完整 Steps 线性拆成可持久化 Entries。"""
+
     entries: list[Entry] = []
     current_parent = parent_id
     for step in result.steps:
@@ -1323,6 +1462,7 @@ def _entries_from_steps(parent_id: str | None, result: RunResult) -> tuple[Entry
             len(calls) != len(step.tool_results)
             or [call.id for call in calls] != [item.call_id for item in step.tool_results]
         ):
+            # 在首个不完整 Tool 往返处停止，保持 Session 仅含可重放的消息前缀。
             break
         assistant = AssistantMessageEntry(
             parent_id=current_parent,
@@ -1333,6 +1473,7 @@ def _entries_from_steps(parent_id: str | None, result: RunResult) -> tuple[Entry
         entries.append(assistant)
         current_parent = assistant.id
         for result_item in step.tool_results:
+            # 多个 Tool Results 按 Model 提议顺序串成 Entry 链，同时保持 call_id 关联。
             tool_entry = ToolResultEntry(
                 parent_id=current_parent,
                 result=deepcopy(result_item),
@@ -1346,11 +1487,14 @@ def _anchor_from_result(
     model_id: str | None,
     result: RunResult,
 ) -> PromptBudgetAnchor | None:
+    """从最终 Step 的 provider Usage 建立仅限运行时的 prompt 预算锚点。"""
+
     if model_id is None or not result.steps:
         return None
     final_step = result.steps[-1]
     usage = final_step.response.usage
     if usage is None:
+        # 缺少 Usage 时不能把本地估算伪装成 provider 报告值。
         return None
     return PromptBudgetAnchor(
         model_id=model_id,

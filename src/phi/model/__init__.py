@@ -1,4 +1,4 @@
-"""Stateless Model protocol boundary and normalized domain values."""
+"""导出无状态 Model 协议边界及其归一化领域值。"""
 
 from phi.model.assembler import ResponseAssembler
 from phi.model.errors import (

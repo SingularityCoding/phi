@@ -1,4 +1,4 @@
-"""Bounded Runs, Events, and behavioral Hooks."""
+"""导出有界 Run、Event、行为 Hook 与 Context 策略。"""
 
 from phi.harness.compaction import (
     AtomicConversationUnit,

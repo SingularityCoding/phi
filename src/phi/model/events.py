@@ -1,3 +1,5 @@
+"""定义 Model 流在协议归一化后产生的增量事件。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,21 +10,21 @@ from phi.model.types import Usage
 
 @dataclass(frozen=True)
 class ContentDelta:
-    """A fragment of visible Model content."""
+    """表示一段用户可见的 Model 内容。"""
 
     text: str
 
 
 @dataclass(frozen=True)
 class ReasoningDelta:
-    """A fragment of provider-reported Model reasoning."""
+    """表示一段提供方报告的 Model 推理内容。"""
 
     text: str
 
 
 @dataclass(frozen=True)
 class ToolCallDelta:
-    """One fragment of a possibly chunked Tool Call."""
+    """表示可能被拆分传输的 Tool Call 的一个分片。"""
 
     index: int
     id: str | None = None
@@ -32,7 +34,7 @@ class ToolCallDelta:
 
 @dataclass(frozen=True)
 class FinishEvent:
-    """The finish reason reported for a Model response."""
+    """表示提供方报告的 Model 响应结束原因。"""
 
     finish_reason: str | None
     raw: dict[str, Any]
@@ -40,10 +42,11 @@ class FinishEvent:
 
 @dataclass(frozen=True)
 class UsageEvent:
-    """Provider-reported Usage, which may arrive after the finish chunk."""
+    """表示提供方报告的 Usage；它可能晚于结束分片到达。"""
 
     usage: Usage
     raw: dict[str, Any]
 
 
+# 联合类型明确限定 Model 流可跨越协议边界的事件集合。
 type ModelEvent = ContentDelta | ReasoningDelta | ToolCallDelta | FinishEvent | UsageEvent

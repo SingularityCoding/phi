@@ -1,3 +1,5 @@
+"""发现并校验用于 Subagent Delegation 的 Agent Definitions。"""
+
 from __future__ import annotations
 
 import re
@@ -29,7 +31,7 @@ _FRONTMATTER_FIELDS = {
 
 @dataclass(frozen=True)
 class AgentDefinition:
-    """Validated specialist instructions and optional child authority preferences."""
+    """经过校验的专家指令及可选 Subagent 权限偏好。"""
 
     name: str
     description: str
@@ -41,23 +43,27 @@ class AgentDefinition:
 
 @dataclass(frozen=True)
 class AgentDefinitionDiagnostic:
-    """Actionable warning produced while tolerantly discovering Agent Definitions."""
+    """容错发现 Agent Definitions 时产生的一条可操作警告。"""
 
     source_path: Path
     reason: str
 
     def __str__(self) -> str:
+        """以“来源路径: 原因”的形式呈现诊断。"""
+
         return f"{self.source_path}: {self.reason}"
 
 
 @dataclass(frozen=True)
 class AgentDefinitionDiscovery:
-    """Immutable effective Agent Definition collection and diagnostics."""
+    """不可变的有效 Agent Definition 集合及诊断。"""
 
     definitions: Mapping[str, AgentDefinition]
     diagnostics: tuple[AgentDefinitionDiagnostic, ...] = ()
 
     def __post_init__(self) -> None:
+        """复制并冻结定义映射，避免运行时集合被外部改写。"""
+
         object.__setattr__(self, "definitions", MappingProxyType(dict(self.definitions)))
 
 
@@ -74,8 +80,12 @@ def discover_agent_definitions(
     project_root: Path,
     project_ignore_root: Path | None = None,
 ) -> AgentDefinitionDiscovery:
-    """Discover effective global and project Agent Definitions."""
+    """发现最终生效的全局与项目 Agent Definitions。
 
+    项目定义按名称覆盖全局定义；无效候选仅产生诊断并被跳过。
+    """
+
+    # 分别扫描后再合并，使“项目优先”的来源规则清晰且可测试。
     global_definitions, global_diagnostics = _discover_root(global_root)
     project_rules, ignore_diagnostics = initial_ignore_rules(
         project_ignore_root,
@@ -103,6 +113,9 @@ def _discover_root(
     *,
     initial_rules: tuple[IgnoreRule, ...] = (),
 ) -> tuple[dict[str, AgentDefinition], tuple[AgentDefinitionDiagnostic, ...]]:
+    """容错扫描一个 Agent Definition 根目录。"""
+
+    # 定义目录同样受符号链接与项目 ignore 规则约束。
     if (
         has_symlink_component(root)
         or not root.is_dir()
@@ -122,12 +135,14 @@ def _discover_root(
         AgentDefinitionDiagnostic(item.source_path, item.reason) for item in candidate_diagnostics
     )
     for source_path in source_paths:
+        # 一个损坏定义不应阻止其他可用 Subagent 类型进入注册表。
         try:
             definition = _load_definition(source_path)
         except (OSError, UnicodeError, yaml.YAMLError, TypeError, ValueError) as error:
             diagnostics.append(AgentDefinitionDiagnostic(source_path, str(error)))
             continue
         if definition.name in definitions:
+            # 同一根目录发生名称冲突时保留首个有效定义，保持结果确定。
             diagnostics.append(
                 AgentDefinitionDiagnostic(
                     source_path,
@@ -142,6 +157,8 @@ def _discover_root(
 
 
 def _load_definition(source_path: Path) -> AgentDefinition:
+    """读取并严格校验一个 Agent Definition 候选文件。"""
+
     parsed = parse_instruction_file(
         source_path,
         resource_label="Agent Definition",
@@ -159,6 +176,7 @@ def _load_definition(source_path: Path) -> AgentDefinition:
     raw_tools = frontmatter.get("tools")
     tools: tuple[str, ...] | None = None
     if raw_tools is not None:
+        # ``None`` 表示继承父 Agent 的可用 Tools；显式列表则是严格白名单。
         if not isinstance(raw_tools, list) or not all(
             isinstance(item, str) and item.strip() for item in raw_tools
         ):
@@ -172,6 +190,7 @@ def _load_definition(source_path: Path) -> AgentDefinition:
             raise ValueError("Agent Definition model must be non-empty text")
         model = model.strip()
     disabled = frontmatter.get("disable-model-invocation", False)
+    # bool 是唯一接受的配置类型，避免 YAML 数字值产生意外启停。
     if type(disabled) is not bool:
         raise ValueError("Agent Definition disable-model-invocation must be a boolean")
     return AgentDefinition(

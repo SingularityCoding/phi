@@ -1,4 +1,4 @@
-"""Model Context Protocol configuration and cwd-scoped runtime integration."""
+"""导出 MCP 配置、cwd 级运行时、资源与 Prompt 的公共类型。"""
 
 from phi.mcp.client import McpRuntime, connect_mcp_servers
 from phi.mcp.config import (

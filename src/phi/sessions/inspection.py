@@ -1,4 +1,4 @@
-"""Immutable presentation model for one read-only Context inspection."""
+"""一次只读 Context 检查所使用的不可变展示模型。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from phi.model import ModelRequest
 
 @dataclass(frozen=True)
 class ProjectionCounts:
-    """Meaningful counts across the Session-to-request projection."""
+    """从 Session 到 Model 请求的各层投影数量。"""
 
     session_path_entries: int
     conversation_view_entries: int
@@ -26,7 +26,7 @@ class ProjectionCounts:
 
 @dataclass(frozen=True)
 class InspectedTool:
-    """One registered Tool represented in an immutable Context snapshot."""
+    """不可变 Context 快照中的一个已注册 Tool。"""
 
     name: str
     description: str
@@ -38,7 +38,7 @@ class InspectedTool:
 
 @dataclass(frozen=True)
 class InspectedMessage:
-    """One selected Model-visible message with semantic presentation metadata."""
+    """一条选入 Context 的 Model 可见消息及其语义展示信息。"""
 
     index: int
     label: str
@@ -51,7 +51,7 @@ class InspectedMessage:
 
 @dataclass(frozen=True)
 class InspectedSummary:
-    """Generated representation of Entries omitted from the finite Context."""
+    """有限 Context 中被省略 Entries 的生成式表示。"""
 
     content: str
     characters: int
@@ -61,7 +61,7 @@ class InspectedSummary:
 
 @dataclass(frozen=True)
 class ContextInspection:
-    """Complete inspectable projection and budget diagnostics for one Context."""
+    """一个 Context 的完整可检查投影与预算诊断。"""
 
     context: Context
     request: ModelRequest
@@ -78,14 +78,20 @@ class ContextInspection:
     diagnostics: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """冻结请求中的嵌套容器，防止检查结果随后被调用方改写。"""
+
         object.__setattr__(self, "request", freeze_request(self.request))
 
     @property
     def character_counts(self) -> Mapping[str, int]:
+        """返回按 Context 组成部分统计的只读字符数。"""
+
         return MappingProxyType(self.context.character_counts)
 
     @property
     def utilization_percent(self) -> float | None:
+        """计算估算 prompt 占有效输入上限的百分比。"""
+
         if self.effective_input_limit is None:
             return None
         return self.estimate.tokens / self.effective_input_limit * 100

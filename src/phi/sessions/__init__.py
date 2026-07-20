@@ -1,4 +1,4 @@
-"""Durable Session trees and stateless Session application services."""
+"""导出持久化 Session 树及无状态 Session 应用服务的公共 API。"""
 
 from phi.harness import PromptBudgetAnchor
 from phi.sessions.entries import (

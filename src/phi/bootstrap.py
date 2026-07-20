@@ -1,3 +1,5 @@
+"""为一个工作目录组装 Host 共用的运行时资源及其生命周期。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -72,7 +74,7 @@ type RuntimeDiagnostic = (
 
 @dataclass(frozen=True)
 class RuntimeResources:
-    """Resources assembled once for one active working directory."""
+    """保存为一个活动工作目录一次性组装的运行时资源。"""
 
     cwd: Path
     project_instructions: ProjectInstructions
@@ -89,19 +91,23 @@ class RuntimeResources:
 
     @property
     def stable_instructions(self) -> str:
+        """返回执行与 Context 检查共用的稳定指令文本。"""
+
         return self.instruction_assembly.stable_instructions
 
     @property
     def instruction_sections(self) -> tuple[InstructionSection, ...]:
+        """返回保留来源信息的稳定指令分段。"""
+
         return self.instruction_assembly.sections
 
     def invoke_skill(self, name: str) -> str:
-        """Select an already loaded Skill through the trusted user route."""
+        """通过可信用户路径选择一个已加载的 Skill。"""
 
         return invoke_user_skill(self.skill_discovery.skills, name)
 
     async def list_mcp_prompts(self, server_id: str | None = None) -> tuple[McpPrompt, ...]:
-        """List cached MCP Prompts through the trusted runtime route."""
+        """通过可信运行时路径列出缓存的 MCP Prompt。"""
 
         return await self.mcp.list_prompts(server_id)
 
@@ -110,19 +116,23 @@ class RuntimeResources:
         command: str,
         arguments: dict[str, str],
     ) -> McpPromptResult:
-        """Retrieve one user-selected MCP Prompt without mutating a Session."""
+        """读取用户选择的一个 MCP Prompt，且不修改 Session。"""
 
         return await self.mcp.get_prompt(command, arguments)
 
     async def close(self) -> None:
-        """Close every long-lived cwd-scoped resource exactly once."""
+        """依次关闭全部长生命周期的工作目录级资源。"""
 
+        # Subagent 可能仍在使用 MCP Tool；先收拢 Agent 任务，再关闭 MCP 进程。
         try:
             await self.agents.close()
         finally:
+            # 即使 Agent 清理失败也必须尝试关闭 MCP，防止遗留子进程和传输。
             await self.mcp.close()
 
     async def __aenter__(self) -> RuntimeResources:
+        """进入异步上下文并返回已组装资源。"""
+
         return self
 
     async def __aexit__(
@@ -131,17 +141,19 @@ class RuntimeResources:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        """退出异步上下文时关闭 Agent 与 MCP 资源。"""
+
         del exc_type, exc_value, traceback
         await self.close()
 
 
 class HostConfigurationError(ValueError):
-    """Trusted Settings cannot produce a usable production Host runtime."""
+    """表示可信 Settings 无法产生可用的生产 Host 运行时。"""
 
 
 @dataclass
 class HostRuntime:
-    """One reusable Host lifetime for Model, Session, and cwd-scoped resources."""
+    """保存可复用的 Model、Session 存储与工作目录级 Host 生命周期。"""
 
     settings: Settings
     model: Model
@@ -153,12 +165,14 @@ class HostRuntime:
     _closed: bool = False
 
     async def close(self) -> None:
-        """Settle Agent/MCP resources before closing the owned Model transport."""
+        """先收拢 Agent/MCP 资源，再关闭拥有的 Model 传输。"""
 
+        # Host 可能从多个退出路径调用 close；先置位保证清理只启动一次。
         if self._closed:
             return
         self._closed = True
         resource_error: BaseException | None = None
+        # 分别保存资源错误与传输错误，确保前者不会阻止 HTTP 客户端关闭。
         try:
             await self.resources.close()
         except BaseException as error:
@@ -167,6 +181,7 @@ class HostRuntime:
             if self.close_callback is not None:
                 await self.close_callback()
         except BaseException:
+            # 若资源清理已经失败，保留最先发生的错误；否则传播传输关闭错误。
             if resource_error is None:
                 raise
         if resource_error is not None:
@@ -174,8 +189,13 @@ class HostRuntime:
 
 
 def model_config_from_settings(settings: Settings) -> ModelConfig:
-    """Construct trusted Model configuration without coupling the Model package to Settings."""
+    """从 Settings 构造可信 Model 配置，避免 Model 包反向依赖 Settings。
 
+    Raises:
+        HostConfigurationError: 凭据、端点或超时无法用于生产 Host。
+    """
+
+    # Settings 已完成环境字符串解析；此处验证生产运行时才需要的可用性条件。
     api_key = settings.api_key.get_secret_value()
     if not api_key.strip():
         raise HostConfigurationError("PHI_API_KEY is required")
@@ -192,7 +212,7 @@ def model_config_from_settings(settings: Settings) -> ModelConfig:
 
 
 async def build_headless_runtime(cwd: Path) -> HostRuntime:
-    """Build one production runtime with the fail-closed headless approval policy."""
+    """使用 fail-closed 的无头 Approval Policy 构造生产运行时。"""
 
     return await _build_host_runtime(
         cwd,
@@ -205,13 +225,15 @@ async def _build_host_runtime(
     *,
     approval_policy: ApprovalPolicy,
 ) -> HostRuntime:
-    """Assemble the shared production lifetime used by both Host adapters."""
+    """组装两个 Host 适配器共用的生产生命周期。"""
 
+    # Model 配置与客户端先建立；后续任何装配失败都必须逆序清理已创建资源。
     settings = Settings()
     config = model_config_from_settings(settings)
     client = httpx.AsyncClient()
     resources: RuntimeResources | None = None
     try:
+        # 可用 Model 列表与工作目录资源共享同一个 Host 启动阶段，但职责保持分离。
         available_models = tuple(await list_available_models(config, client=client))
         resources = await build_runtime_resources(
             cwd,
@@ -219,10 +241,12 @@ async def _build_host_runtime(
             approval_policy=approval_policy,
         )
     except BaseException:
+        # 捕获 BaseException 也覆盖任务取消，保证半组装运行时不会泄漏资源。
         if resources is not None:
             await resources.close()
         await client.aclose()
         raise
+    # OpenAICompatibleModel 借用同一客户端，因此由 HostRuntime 的回调统一关闭。
     return HostRuntime(
         settings=settings,
         model=OpenAICompatibleModel(config, client=client),
@@ -238,7 +262,7 @@ async def build_interactive_runtime(
     *,
     approval_resolver: ApprovalResolver,
 ) -> HostRuntime:
-    """Build one production runtime with an interactive, user-resolving policy."""
+    """使用由用户交互解析 ask 的 Approval Policy 构造生产运行时。"""
 
     policy = RuleBasedApprovalPolicy(DEFAULT_MODE, approval_resolver)
     runtime = await _build_host_runtime(cwd, approval_policy=policy)
@@ -247,7 +271,7 @@ async def build_interactive_runtime(
 
 
 class CwdRuntimeBootstrap:
-    """Own and reuse the active cwd-scoped runtime resource collection."""
+    """拥有并复用当前工作目录对应的运行时资源集合。"""
 
     def __init__(
         self,
@@ -261,6 +285,8 @@ class CwdRuntimeBootstrap:
         event_bus: EventEmitter[McpEvent] | None = None,
         default_tool_timeout_seconds: float = 30.0,
     ) -> None:
+        """保存装配选项，并初始化互斥的空资源缓存。"""
+
         self._base_instructions = base_instructions
         self._personal_instructions = personal_instructions
         self._global_skill_root = global_skill_root
@@ -273,12 +299,15 @@ class CwdRuntimeBootstrap:
         self._lock = asyncio.Lock()
 
     async def load(self, cwd: Path, *, rebuild: bool = False) -> RuntimeResources:
-        """Return cached resources for one cwd or rebuild them explicitly."""
+        """返回同一工作目录的缓存资源，或按要求显式重建。"""
 
+        # 先规范化路径，确保符号链接或相对写法不会制造重复的 cwd 生命周期。
         canonical_cwd = cwd.expanduser().resolve(strict=True)
+        # 锁覆盖“比较、关闭、重建、发布”全过程，避免并发 Host 操作交错资源代际。
         async with self._lock:
             if not rebuild and self._active is not None and self._active.cwd == canonical_cwd:
                 return self._active
+            # 先从缓存摘除旧资源；若关闭或重建失败，调用方不会拿到已关闭对象。
             previous = self._active
             self._active = None
             if previous is not None:
@@ -294,19 +323,23 @@ class CwdRuntimeBootstrap:
                 event_bus=self._event_bus,
                 default_tool_timeout_seconds=self._default_tool_timeout_seconds,
             )
+            # 只有完整装配成功后才原子地发布为当前活动资源。
             self._active = resources
             return resources
 
     async def close(self) -> None:
-        """Close the active cwd lifetime and clear the cache."""
+        """关闭当前工作目录生命周期并清空缓存。"""
 
         async with self._lock:
+            # 先清空引用再 await，重入式观察不会取得正在关闭的资源。
             active = self._active
             self._active = None
             if active is not None:
                 await active.close()
 
     async def __aenter__(self) -> CwdRuntimeBootstrap:
+        """进入异步上下文并返回 Bootstrap 管理器。"""
+
         return self
 
     async def __aexit__(
@@ -315,6 +348,8 @@ class CwdRuntimeBootstrap:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        """退出异步上下文时关闭缓存的工作目录资源。"""
+
         del exc_type, exc_value, traceback
         await self.close()
 
@@ -326,8 +361,9 @@ def assemble_stable_instructions(
     project_instructions: ProjectInstructions,
     skill_discovery: SkillDiscovery,
 ) -> str:
-    """Compose the one stable prompt prefix shared by inspection and execution."""
+    """组合 Context 检查与执行共用的唯一稳定指令前缀。"""
 
+    # 文本渲染委托给结构化 assembly，避免检查界面再从分隔符反向解析来源。
     assembly = assemble_instruction_assembly(
         base_instructions=base_instructions,
         personal_instructions=personal_instructions,
@@ -344,8 +380,9 @@ def assemble_instruction_assembly(
     project_instructions: ProjectInstructions,
     skill_discovery: SkillDiscovery,
 ) -> InstructionAssembly:
-    """Retain trusted instruction origins without parsing the rendered system prompt."""
+    """在不解析渲染后 system prompt 的前提下保留可信指令来源。"""
 
+    # 顺序就是最终 system prompt 的权威优先序；内容为空的可选分段稍后过滤。
     candidates = (
         InstructionSection(
             id="phi-base",
@@ -380,6 +417,7 @@ def assemble_instruction_assembly(
             content=render_model_skill_menu(skill_discovery.skills),
         ),
     )
+    # 不保留空分段，使执行文本与检查界面看到的来源集合严格一致。
     return InstructionAssembly(tuple(section for section in candidates if section.content.strip()))
 
 
@@ -398,16 +436,23 @@ async def build_runtime_resources(
     event_bus: EventEmitter[McpEvent] | None = None,
     default_tool_timeout_seconds: float = 30.0,
 ) -> RuntimeResources:
-    """Build Project Instructions, Skills, Tools, and stable Context input for a cwd."""
+    """为工作目录组装 Project Instructions、扩展能力与 Tool 执行边界。
 
+    装配顺序先建立无副作用的本地资源，再连接 MCP，最后构造 Tool Dispatcher；任何
+    中途失败都会关闭已经启动的 Agent/MCP 长生命周期资源。
+    """
+
+    # Environment 首先规范化 cwd，并为内置文件与 Shell Tool 提供真实执行边界。
     environment = ConfinedEnvironment(cwd)
     canonical_cwd = environment.root
     project_instructions = load_project_instructions(canonical_cwd)
+    # Project Skill 覆盖全局同名定义；单个无效定义只进入诊断而不阻断批量加载。
     discovery = discover_skills(
         global_root=(global_skill_root or Path("~/.phi/skills")).expanduser(),
         project_root=project_skill_root or canonical_cwd / ".phi" / "skills",
         project_ignore_root=canonical_cwd,
     )
+    # 稳定指令只组装一次，随后同时交给普通 Agent 与 Subagent 使用。
     instruction_assembly = assemble_instruction_assembly(
         base_instructions=base_instructions,
         personal_instructions=personal_instructions,
@@ -415,6 +460,7 @@ async def build_runtime_resources(
         skill_discovery=discovery,
     )
     stable_instructions = instruction_assembly.stable_instructions
+    # Agent Definition 采用同样的全局/项目覆盖模型，但不继承父 Agent 的 Context。
     agent_definitions = discover_agent_definitions(
         global_root=(global_agent_root or Path("~/.phi/agents")).expanduser(),
         project_root=project_agent_root or canonical_cwd / ".phi" / "agents",
@@ -424,6 +470,7 @@ async def build_runtime_resources(
         agent_definitions.definitions,
         stable_instructions=stable_instructions,
     )
+    # 所有能力最终汇入同一个 Tool Registry，避免 Host 或 Subagent 建立隐藏执行环。
     registry = build_default_registry()
     skill_tool = build_skill_tool(discovery.skills)
     if skill_tool is not None:
@@ -432,6 +479,7 @@ async def build_runtime_resources(
     mcp = McpRuntime()
     try:
         try:
+            # MCP 配置损坏按诊断降级：本地 Tools 仍可使用，MCP 则 fail-closed 为禁用。
             mcp_config = await load_merged_mcp_config(
                 (global_mcp_config_path or Path("~/.phi/mcp.json")).expanduser(),
                 project_mcp_config_path or canonical_cwd / ".phi" / "mcp.json",
@@ -439,14 +487,17 @@ async def build_runtime_resources(
         except McpConfigError as error:
             config_diagnostics = (error.diagnostic,)
         else:
+            # 每个 MCP server 独立连接；成功发现的 Tool 直接注册到公共 Registry。
             mcp = await connect_mcp_servers(
                 mcp_config,
                 cwd=canonical_cwd,
                 registry=registry,
                 events=event_bus,
             )
+        # Delegation Tool 只组合现有 Session/Run 服务，其定义在 MCP 后注册并接受冲突校验。
         agent_tools = build_agent_tools(dict(agent_definitions.definitions))
         registry.register_many(agent_tools)
+        # Dispatcher 是 Model 提议到真实执行之间的唯一授权、校验和超时边界。
         dispatcher = ToolDispatcher(
             registry,
             approval_policy,
@@ -457,11 +508,13 @@ async def build_runtime_resources(
             default_timeout_seconds=default_tool_timeout_seconds,
         )
     except BaseException:
+        # 捕获取消与普通异常，并以 Agent→MCP 顺序清理部分组装的外部资源。
         try:
             await agents.close()
         finally:
             await mcp.close()
         raise
+    # 诊断按来源稳定拼接，供 Host 按同一顺序展示启动时的非致命问题。
     return RuntimeResources(
         cwd=canonical_cwd,
         project_instructions=project_instructions,
