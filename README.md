@@ -135,6 +135,9 @@ request, character counts, Token Estimate diagnostics, and known input limits; i
 the Model. MCP configuration commands atomically edit only the selected source and never start a
 server. `phi doctor` checks trusted Model settings, Proxy model discovery, and default-Model
 availability without creating a Session, starting MCP, or making a Model response request.
+Human-readable commands use width-aware tables, panels, semantic status colors, and explicit text
+labels. Phi honors `NO_COLOR`, dumb terminals, and redirected streams without adding ANSI escapes;
+machine JSON/JSONL, completed Run output, and the `session_id=<id>` stderr record remain undecorated.
 
 Phi loads stdio MCP servers from `~/.phi/mcp.json` and `.phi/mcp.json`; the files may be managed with
 the `phi mcp` commands above or edited directly. Project definitions replace global definitions

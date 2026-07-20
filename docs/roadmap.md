@@ -45,8 +45,8 @@ Implemented today:
   implicit Forks, bounded Steps, redacted JSONL Events, fail-closed non-interactive approval,
   documented exit statuses, and complete cwd-runtime cleanup;
 - remaining v1 headless commands for validated Session list/resume/exact Fork, complete Context
-  inspection, atomic project/global MCP configuration management, and bounded Model settings/Proxy
-  diagnostics;
+  inspection, atomic project/global MCP configuration management, bounded Model settings/Proxy
+  diagnostics, and centralized width-aware human rendering that preserves machine-output contracts;
 - a test-only behavioral-evaluation runner with isolated workspace, Session, Skill, Agent
   Definition, and MCP roots; byte-preserving Environment deltas; deterministic validators; safe
   Session/Trace diagnostics; offline Scripted Model coverage; and a five-scenario opt-in live Agent

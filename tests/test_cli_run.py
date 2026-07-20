@@ -125,6 +125,29 @@ def test_run_creates_a_durable_session_and_keeps_stdout_machine_usable(
     assert result.stderr.count("Model input limit is unknown") == 1
 
 
+def test_run_preserves_multiline_markup_shaped_agent_output_exactly(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output = "[bold red]literal Model output[/bold red]\nsecond line"
+    factory = ScenarioRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        ScriptedModel([ModelResponse(content=output)]),
+        (ModelInfo("model-a"),),
+    )
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr("phi.cli.main._runtime_factory", factory)
+
+    result = runner.invoke(app, ["run", "respond literally"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"{output}\n"
+    assert "\x1b[" not in result.stdout
+
+
 def test_run_rejects_a_blank_explicit_model_before_session_mutation(
     monkeypatch,
     tmp_path: Path,
@@ -217,6 +240,8 @@ def test_json_mode_emits_the_same_redacted_ordered_records_as_trace(
     assert records[-1]["payload"]["status"] == "completed"
     assert records[-1]["payload"]["output"] == "api_key=[REDACTED]"
     assert {record["schema_version"] for record in records} == {1}
+    assert "\x1b[" not in result.stdout
+    assert "\x1b[" not in result.stderr
     assert factory.close_count == 1
 
     session_id = _session_id(result.stderr)
@@ -687,7 +712,7 @@ def test_run_loads_project_runtime_inputs_and_reports_isolated_diagnostics(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
+    workspace = tmp_path / "[bold]workspace"
     workspace.mkdir()
     (workspace / "AGENTS.md").write_text("Project instruction ground truth.\n", encoding="utf-8")
     skill_path = workspace / ".phi" / "skills" / "inspect.md"
@@ -715,13 +740,18 @@ def test_run_loads_project_runtime_inputs_and_reports_isolated_diagnostics(
     )
     monkeypatch.chdir(workspace)
     monkeypatch.setattr("phi.cli.main._runtime_factory", factory)
+    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
 
-    result = runner.invoke(app, ["run", "inspect"])
+    result = runner.invoke(app, ["run", "inspect"], color=True)
 
     assert result.exit_code == 0
     assert result.stdout == "runtime remained healthy\n"
     assert "warning:" in result.stderr
-    assert str(mcp_path) in result.stderr
+    assert str(mcp_path) in "".join(result.stderr.split())
+    assert "\x1b[" in result.stderr
+    assert "\x1b[" not in result.stdout
     system_message = model.requests[0].messages[0]
     assert system_message["role"] == "system"
     assert "Agent composed from a Model and a Harness" in system_message["content"]

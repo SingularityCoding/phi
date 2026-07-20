@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shlex
 import sys
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -13,19 +12,27 @@ import typer
 from phi.bootstrap import build_headless_runtime, model_config_from_settings
 from phi.cli.headless import execute_headless_run
 from phi.cli.management import (
-    ContextCommandOutcome,
     execute_context_inspection,
     run_doctor,
     select_context_session,
 )
 from phi.cli.model_selection import require_available_model, require_explicit_model_id
-from phi.harness import RunEvent, RunStatus
-from phi.mcp import (
-    ConfiguredMcpServer,
-    add_mcp_server,
-    list_configured_mcp_servers,
-    remove_mcp_server,
+from phi.cli.rendering import (
+    render_cancelled,
+    render_confirmation,
+    render_context,
+    render_doctor,
+    render_empty_sessions,
+    render_error,
+    render_exhausted,
+    render_failure,
+    render_mcp_servers,
+    render_session_fork,
+    render_sessions,
+    render_warning,
 )
+from phi.harness import RunEvent, RunStatus
+from phi.mcp import add_mcp_server, list_configured_mcp_servers, remove_mcp_server
 from phi.model import ModelConfig, ModelInfo, list_available_models
 from phi.sessions import (
     SessionHandle,
@@ -101,7 +108,7 @@ def _run_async[T](operation: Coroutine[Any, Any, T]) -> T:
     try:
         return asyncio.run(operation)
     except KeyboardInterrupt:
-        typer.echo("Operation cancelled", err=True)
+        render_cancelled("Operation cancelled")
         raise typer.Exit(130) from None
     except Exception as error:
         _exit_operational(error)
@@ -111,7 +118,7 @@ def _exit_operational(error: Exception) -> Never:
     """Render one redacted operational failure without exposing a traceback."""
 
     message = redact_text(str(error)) or type(error).__name__
-    typer.echo(f"error: {message}", err=True)
+    render_error(message)
     raise typer.Exit(1) from None
 
 
@@ -136,12 +143,12 @@ def _report_session_diagnostics(handles: list[SessionHandle]) -> None:
         for diagnostic in handle.diagnostics:
             if diagnostic not in reported:
                 reported.add(diagnostic)
-                typer.echo(f"warning: {redact_text(diagnostic)}", err=True)
+                render_warning(redact_text(diagnostic))
 
 
 def _report_diagnostics(diagnostics: tuple[str, ...]) -> None:
     for diagnostic in diagnostics:
-        typer.echo(f"warning: {redact_text(diagnostic)}", err=True)
+        render_warning(redact_text(diagnostic))
 
 
 @session_app.command("list")
@@ -155,23 +162,9 @@ def session_list_command() -> None:
     )
     _report_session_diagnostics(handles)
     if not handles:
-        typer.echo("No Sessions found.")
+        render_empty_sessions()
         return
-    typer.echo("ID\tNAME\tMODEL\tUPDATED\tORIGIN\tLEAF")
-    for handle in handles:
-        metadata = handle.metadata
-        typer.echo(
-            "\t".join(
-                (
-                    metadata.id,
-                    metadata.name or "-",
-                    metadata.model or "-",
-                    metadata.updated_at.isoformat(),
-                    metadata.origin,
-                    metadata.leaf_id or "-",
-                )
-            )
-        )
+    render_sessions(handles)
 
 
 @session_app.command("resume")
@@ -216,9 +209,7 @@ def session_fork_command(
             model=selected_model,
         )
     )
-    typer.echo(f"session_id={forked.session_id}")
-    typer.echo(f"parent_session_id={source.session_id}")
-    typer.echo(f"fork_point_entry_id={entry_id}")
+    render_session_fork(forked.session_id, source.session_id, entry_id)
 
 
 @app.command("context")
@@ -248,46 +239,7 @@ def context_command(
             )
         )
         return
-    _render_context(outcome)
-
-
-def _render_context(outcome: ContextCommandOutcome) -> None:
-    inspection = outcome.inspection
-    context = inspection.context
-    typer.echo(f"Session ID: {outcome.handle.session_id}")
-    typer.echo(f"Session name: {outcome.handle.metadata.name or '-'}")
-    typer.echo(f"Model: {outcome.model_id}")
-    typer.echo("\n=== SYSTEM PROMPT ===")
-    typer.echo(context.system_prompt)
-    typer.echo("\n=== TOOLS ===")
-    typer.echo(json.dumps(list(context.tools), ensure_ascii=False, indent=2, sort_keys=True))
-    typer.echo("\n=== MESSAGES ===")
-    for index, message in enumerate(context.messages, start=1):
-        typer.echo(f"--- MESSAGE {index}: {_message_label(message)} ---")
-        typer.echo(json.dumps(message, ensure_ascii=False, indent=2, sort_keys=True))
-    typer.echo("\n=== DROPPED HISTORY SUMMARY ===")
-    typer.echo(context.dropped_summary or "(none)")
-    typer.echo("\n=== CHARACTER COUNTS ===")
-    typer.echo(json.dumps(dict(inspection.character_counts), sort_keys=True))
-    typer.echo(f"Token Estimate: {inspection.estimate.tokens}")
-    typer.echo(f"Local Token Estimate: {inspection.estimate.local_tokens}")
-    anchor = "yes" if inspection.estimate.used_provider_anchor else "no"
-    typer.echo(f"Provider Usage anchor contributed: {anchor}")
-    typer.echo(f"Effective input limit: {_known_value(inspection.effective_input_limit)}")
-    typer.echo(f"Safe input limit: {_known_value(inspection.safe_prompt_limit)}")
-
-
-def _known_value(value: int | None) -> str:
-    return "unknown" if value is None else str(value)
-
-
-def _message_label(message: dict[str, Any]) -> str:
-    role = message.get("role")
-    if role == "tool":
-        return "TOOL RESULT"
-    if role == "assistant" and message.get("tool_calls"):
-        return "ASSISTANT + TOOL CALLS"
-    return str(role or "UNKNOWN").upper()
+    render_context(outcome)
 
 
 def _selected_mcp_source(
@@ -316,7 +268,7 @@ def mcp_add_command(
             source=source,
         )
     )
-    typer.echo(f"Added {source} MCP server {name!r}.")
+    render_confirmation(f"Added {source} MCP server {name!r}.")
 
 
 @mcp_app.command("list")
@@ -332,26 +284,7 @@ def mcp_list_command(
             global_only=global_scope,
         )
     )
-    if not servers:
-        typer.echo("No MCP servers configured.")
-        return
-    typer.echo("ID\tSOURCE\tENABLED\tCOMMAND\tARGS\tENV")
-    for server in servers:
-        typer.echo(_mcp_server_row(server))
-
-
-def _mcp_server_row(server: ConfiguredMcpServer) -> str:
-    config = server.config
-    return "\t".join(
-        (
-            server.server_id,
-            server.source,
-            "yes" if config.enabled else "no",
-            config.command,
-            shlex.join(config.args) if config.args else "-",
-            ",".join(sorted(config.env)) if config.env else "-",
-        )
-    )
+    render_mcp_servers(servers, global_only=global_scope)
 
 
 @mcp_app.command("remove")
@@ -363,7 +296,7 @@ def mcp_remove_command(
 
     source, path = _selected_mcp_source(global_scope)
     _run_async(remove_mcp_server(path, name, source=source))
-    typer.echo(f"Removed {source} MCP server {name!r}.")
+    render_confirmation(f"Removed {source} MCP server {name!r}.")
 
 
 @app.command("doctor")
@@ -376,10 +309,7 @@ def doctor_command() -> None:
             model_discovery=_model_discovery,
         )
     )
-    for check in report.checks:
-        typer.echo(f"{check.status} {check.name}")
-        if check.detail is not None:
-            typer.echo(f"{check.name}: {redact_text(check.detail)}", err=True)
+    render_doctor(report.checks)
     if not report.healthy:
         raise typer.Exit(1)
 
@@ -410,16 +340,13 @@ def run_command(
                 max_steps=max_steps,
                 events=events,
                 report_session=lambda value: typer.echo(f"session_id={value}", err=True),
-                report_diagnostic=lambda value: typer.echo(
-                    f"warning: {redact_text(value)}",
-                    err=True,
-                ),
+                report_diagnostic=lambda value: render_warning(redact_text(value)),
             )
         )
         if events is not None:
             events.raise_if_failed()
     except KeyboardInterrupt:
-        typer.echo("Run cancelled", err=True)
+        render_cancelled("Run cancelled")
         raise typer.Exit(130) from None
     except Exception as error:
         _exit_operational(error)
@@ -430,10 +357,10 @@ def run_command(
         return
     if outcome.result.status is RunStatus.FAILED:
         assert outcome.result.error is not None
-        typer.echo(f"Run failed: {redact_text(str(outcome.result.error))}", err=True)
+        render_failure(f"Run failed: {redact_text(str(outcome.result.error))}")
         raise typer.Exit(1)
     if outcome.result.status is RunStatus.MAX_STEPS:
-        typer.echo(f"Run exhausted its Step budget ({max_steps})", err=True)
+        render_exhausted(f"Run exhausted its Step budget ({max_steps})")
         raise typer.Exit(2)
-    typer.echo("Run cancelled", err=True)
+    render_cancelled("Run cancelled")
     raise typer.Exit(130)

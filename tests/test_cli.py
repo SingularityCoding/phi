@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from phi.cli import app
@@ -17,3 +18,24 @@ def test_bare_invocation_launches_tui(monkeypatch):
 
     assert result.exit_code == 0
     assert calls == [{"cwd": Path.cwd().resolve()}]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (["--help"], "session"),
+        (["session", "--help"], "resume"),
+        (["mcp", "--help"], "remove"),
+        (["run", "--help"], "--max-steps"),
+    ],
+)
+def test_root_group_and_leaf_help_remain_readable(
+    arguments: list[str],
+    expected: str,
+) -> None:
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 0
+    assert "Usage:" in result.stdout
+    assert expected in result.stdout
+    assert "Traceback" not in result.stdout

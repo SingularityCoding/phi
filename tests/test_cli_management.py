@@ -117,7 +117,9 @@ def test_session_list_reports_empty_store(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["session", "list"])
 
     assert result.exit_code == 0
-    assert result.stdout == "No Sessions found.\n"
+    assert "Sessions (0)" in result.stdout
+    assert "No Sessions found." in result.stdout
+    assert "\x1b[" not in result.stdout
     assert result.stderr == ""
 
 
@@ -143,11 +145,15 @@ def test_session_list_orders_latest_first_and_reports_recovery_diagnostics(
     result = runner.invoke(app, ["session", "list"])
 
     assert result.exit_code == 0
-    rows = result.stdout.splitlines()
-    assert rows[0] == "ID\tNAME\tMODEL\tUPDATED\tORIGIN\tLEAF"
-    assert rows[1].startswith(f"{latest.session_id}\tLatest renamed\tmodel-a\t")
-    assert rows[2].startswith(f"{older.session_id}\t-\t-\t")
-    assert "\tnew\t-" in rows[2]
+    assert "Sessions (2)" in result.stdout
+    assert all(
+        label in result.stdout for label in ("ID", "Name", "Model", "Updated", "Origin", "Leaf")
+    )
+    assert result.stdout.index(latest.session_id) < result.stdout.index(older.session_id)
+    assert "Latest renamed" in result.stdout
+    assert "model-a" in result.stdout
+    assert "new" in result.stdout
+    assert "\x1b[" not in result.stdout
     assert result.stderr.count("ignored 1 uncommitted trailing Entry record(s)") == 1
 
 
@@ -183,11 +189,11 @@ def test_session_list_uses_id_ties_and_shows_fork_and_subagent_origins(
 
     result = runner.invoke(app, ["session", "list"])
 
-    rows = result.stdout.splitlines()[1:]
     assert result.exit_code == 0
-    assert [row.split("\t", 1)[0] for row in rows] == sorted(session_ids, reverse=True)
-    origins = {row.split("\t")[0]: row.split("\t")[4] for row in rows}
-    assert set(origins.values()) == {"new", "fork", "subagent"}
+    ordered_ids = sorted(session_ids, reverse=True)
+    positions = [result.stdout.index(session_id) for session_id in ordered_ids]
+    assert positions == sorted(positions)
+    assert all(origin in result.stdout for origin in ("new", "fork", "subagent"))
 
 
 def test_session_list_fails_closed_on_corrupt_data(monkeypatch, tmp_path: Path) -> None:
@@ -244,6 +250,29 @@ def test_session_resume_rejects_missing_session_without_launch(monkeypatch, tmp_
     assert "was not found" in result.stderr
 
 
+def test_operational_error_styles_markup_shaped_text_without_interpreting_it(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    missing_id = "[bold red]missing[/bold red]"
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    result = runner.invoke(
+        app,
+        ["session", "resume", missing_id],
+        color=True,
+    )
+
+    assert result.exit_code == 1
+    assert missing_id in result.stderr
+    assert "\x1b[" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_session_fork_inherits_model_and_reports_lineage(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     storage = SessionStorage(settings.session_dir)
@@ -264,6 +293,63 @@ def test_session_fork_inherits_model_and_reports_lineage(monkeypatch, tmp_path: 
     assert fork_state.envelope.metadata.origin == "fork"
     assert fork_state.entries == ()
     assert len(asyncio.run(storage.list_metadata())) == 2
+
+
+def test_session_fork_renders_clear_lineage_in_an_interactive_terminal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    storage = SessionStorage(settings.session_dir)
+    source = asyncio.run(_completed_session(storage))
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
+    monkeypatch.setenv("COLUMNS", "80")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    result = runner.invoke(
+        app,
+        ["session", "fork", source.session_id, source.leaf_id],
+        color=True,
+    )
+
+    assert result.exit_code == 0
+    assert "Fork created" in result.stdout
+    assert "New Session" in result.stdout
+    assert "Parent Session" in result.stdout
+    assert "Fork point" in result.stdout
+    assert source.session_id in result.stdout
+    assert source.leaf_id in result.stdout
+    assert "\x1b[" in result.stdout
+
+
+def test_session_fork_honors_no_color_and_wraps_safely_at_narrow_width(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    storage = SessionStorage(settings.session_dir)
+    source = asyncio.run(_completed_session(storage))
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLUMNS", "40")
+    monkeypatch.setenv("NO_COLOR", "1")
+
+    result = runner.invoke(
+        app,
+        ["session", "fork", source.session_id, source.leaf_id],
+        color=True,
+    )
+
+    assert result.exit_code == 0
+    assert "Fork created" in result.stdout
+    assert "New Session" in result.stdout
+    assert "\x1b[" not in result.stdout
+    compact = "".join(result.stdout.replace("│", "").split())
+    assert source.session_id in compact
+    assert source.leaf_id in compact
 
 
 def test_session_fork_validates_explicit_model_before_persisting(
@@ -425,6 +511,8 @@ def test_context_json_selects_latest_session_and_is_complete_and_machine_pure(
     assert document["input_limits"] == {"effective": 100_000, "safe": 83_616}
     assert document["diagnostics"] == ["ignored 1 uncommitted trailing Entry record(s)"]
     assert result.stderr.count("ignored 1 uncommitted trailing Entry record(s)") == 1
+    assert "\x1b[" not in result.stdout
+    assert "\x1b[" not in result.stderr
     assert older.session_id not in result.stdout
     assert model.requests == []
     assert factory.close_count == 1
@@ -449,16 +537,19 @@ def test_context_explicit_session_wins_and_plain_output_labels_complete_sections
     result = runner.invoke(app, ["context", "--session", selected.session_id])
 
     assert result.exit_code == 0
+    assert "Overview" in result.stdout
     assert f"Session ID: {selected.session_id}" in result.stdout
     assert "Model: model-a" in result.stdout
-    assert "=== SYSTEM PROMPT ===" in result.stdout
-    assert "=== TOOLS ===" in result.stdout
-    assert "=== MESSAGES ===" in result.stdout
+    assert "System prompt" in result.stdout
+    assert "Tools" in result.stdout
+    assert "Messages" in result.stdout
+    assert "Message 1 · User" in result.stdout
+    assert "Message 2 · Assistant" in result.stdout
     assert '"role": "user"' in result.stdout
-    assert "=== DROPPED HISTORY SUMMARY ===" in result.stdout
-    assert "=== CHARACTER COUNTS ===" in result.stdout
+    assert "Dropped-history summary" in result.stdout
+    assert "Character counts" in result.stdout
     assert "Token Estimate:" in result.stdout
-    assert "Provider Usage anchor contributed: no" in result.stdout
+    assert "Provider Usage anchor: no" in result.stdout
     assert "Effective input limit: 100000" in result.stdout
     assert "Safe input limit: 83616" in result.stdout
     assert "Usage:" not in result.stdout
@@ -543,8 +634,8 @@ def test_context_plain_output_distinguishes_tool_calls_and_results(
     result = runner.invoke(app, ["context", "--session", handle.session_id])
 
     assert result.exit_code == 0
-    assert "ASSISTANT + TOOL CALLS" in result.stdout
-    assert "TOOL RESULT" in result.stdout
+    assert "Assistant · Tool Calls" in result.stdout
+    assert "Tool Result" in result.stdout
     assert '"tool_call_id": "call-1"' in result.stdout
     assert '"content": "unknown_tool: missing"' in result.stdout
 
@@ -792,6 +883,30 @@ def test_mcp_add_global_scope_and_invalid_inputs(monkeypatch, tmp_path: Path) ->
     assert missing_command.exit_code == 2
 
 
+def test_mcp_mutation_confirmations_are_colored_only_in_interactive_terminals(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _mcp_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    added = runner.invoke(
+        app,
+        ["mcp", "add", "demo", "--", "server"],
+        color=True,
+    )
+    removed = runner.invoke(app, ["mcp", "remove", "demo"], color=True)
+
+    assert added.exit_code == 0
+    assert removed.exit_code == 0
+    assert "Added project MCP server 'demo'." in added.stdout
+    assert "Removed project MCP server 'demo'." in removed.stdout
+    assert "\x1b[" in added.stdout
+    assert "\x1b[" in removed.stdout
+
+
 def test_mcp_list_shows_effective_sources_and_env_names_without_values(
     monkeypatch,
     tmp_path: Path,
@@ -817,7 +932,8 @@ def test_mcp_list_shows_effective_sources_and_env_names_without_values(
             McpConfig(
                 mcpServers={
                     "shared": McpServerConfig(
-                        command="project-shared",
+                        command="[bold]project-shared[/bold]",
+                        args=("long-" + "x" * 100, "TAIL-MARKER"),
                         env={"PROJECT_SECRET": "project-secret-value"},
                         enabled=False,
                     )
@@ -830,14 +946,33 @@ def test_mcp_list_shows_effective_sources_and_env_names_without_values(
     global_only = runner.invoke(app, ["mcp", "list", "--global"])
 
     assert effective.exit_code == 0
-    assert effective.stdout.splitlines()[0] == "ID\tSOURCE\tENABLED\tCOMMAND\tARGS\tENV"
-    assert "global-only\tglobal\tyes\tglobal\t-\tGLOBAL_TOKEN" in effective.stdout
-    assert "shared\tproject\tno\tproject-shared\t-\tPROJECT_SECRET" in effective.stdout
+    assert "MCP servers (2)" in effective.stdout
+    assert "Scope: effective" in effective.stdout
+    assert all(
+        label in effective.stdout
+        for label in ("ID", "Source", "State", "Command", "Arguments", "Environment")
+    )
+    assert all(
+        value in effective.stdout
+        for value in (
+            "global-only",
+            "global",
+            "enabled",
+            "GLOBAL_TOKEN",
+            "shared",
+            "project",
+            "disabled",
+            "[bold]project-shared[/bold]",
+            "TAIL-MARKER",
+            "PROJECT_SECRET",
+        )
+    )
     assert "global-shared" not in effective.stdout
     assert "global-secret-value" not in effective.stdout
     assert "project-secret-value" not in effective.stdout
-    assert "shared\tglobal\tyes\tglobal-shared\told\t-" in global_only.stdout
-    assert "global-only\tglobal" in global_only.stdout
+    assert "Scope: global" in global_only.stdout
+    assert all(value in global_only.stdout for value in ("shared", "global-shared", "old"))
+    assert "global-only" in global_only.stdout
 
 
 def test_mcp_remove_targets_one_source_and_reveals_global_override(
@@ -871,7 +1006,7 @@ def test_mcp_remove_targets_one_source_and_reveals_global_override(
     assert removed.exit_code == 0
     assert removed.stdout == "Removed project MCP server 'shared'.\n"
     assert set(asyncio.run(load_mcp_config(project_path)).servers) == {"keep"}
-    assert "shared\tglobal\tyes\tglobal" in effective.stdout
+    assert all(value in effective.stdout for value in ("shared", "global", "enabled"))
     assert missing.exit_code == 1
     assert "does not exist in project MCP configuration" in missing.stderr
     assert project_path.read_bytes() == before_missing
@@ -883,7 +1018,10 @@ def test_mcp_list_empty_state_is_successful(monkeypatch, tmp_path: Path) -> None
     result = runner.invoke(app, ["mcp", "list"])
 
     assert result.exit_code == 0
-    assert result.stdout == "No MCP servers configured.\n"
+    assert "Scope: effective" in result.stdout
+    assert "MCP servers (0)" in result.stdout
+    assert "No MCP servers configured." in result.stdout
+    assert "\x1b[" not in result.stdout
 
 
 def test_mcp_configuration_commands_never_start_subprocesses(monkeypatch, tmp_path: Path) -> None:
@@ -927,11 +1065,12 @@ def test_doctor_reports_all_passes_without_runtime_side_effects(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert result.stdout.splitlines() == [
-        "PASS settings",
-        "PASS model-discovery",
-        "PASS default-model",
-    ]
+    assert "Doctor" in result.stdout
+    assert "Status" in result.stdout
+    assert "Check" in result.stdout
+    assert result.stdout.index("settings") < result.stdout.index("model-discovery")
+    assert result.stdout.index("model-discovery") < result.stdout.index("default-model")
+    assert result.stdout.count("PASS") == 3
     assert result.stderr == ""
     assert len(discovered_configs) == 1
     assert list(settings.session_dir.glob("*.metadata.json")) == []
@@ -953,11 +1092,9 @@ def test_doctor_missing_credentials_skips_dependent_checks(monkeypatch, tmp_path
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
-    assert result.stdout.splitlines() == [
-        "FAIL settings",
-        "SKIP model-discovery",
-        "SKIP default-model",
-    ]
+    assert result.stdout.count("FAIL") == 1
+    assert result.stdout.count("SKIP") == 2
+    assert all(name in result.stdout for name in ("settings", "model-discovery", "default-model"))
     assert "PHI_API_KEY is required" in result.stderr
     assert discovery_called is False
 
@@ -978,7 +1115,8 @@ def test_doctor_rejects_invalid_base_url_before_network(monkeypatch, tmp_path: P
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
-    assert result.stdout.startswith("FAIL settings\n")
+    assert "FAIL" in result.stdout
+    assert "settings" in result.stdout
     assert "PHI_BASE_URL must be an absolute HTTP(S) URL" in result.stderr
     assert discovery_called is False
 
@@ -999,7 +1137,8 @@ def test_doctor_rejects_invalid_timeout_before_network(monkeypatch, tmp_path: Pa
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
-    assert result.stdout.startswith("FAIL settings\n")
+    assert "FAIL" in result.stdout
+    assert "settings" in result.stdout
     assert "PHI_REQUEST_TIMEOUT_SECONDS must be finite and positive" in result.stderr
     assert discovery_called is False
 
@@ -1021,11 +1160,10 @@ def test_doctor_redacts_known_credential_from_discovery_failure(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
-    assert result.stdout.splitlines() == [
-        "PASS settings",
-        "FAIL model-discovery",
-        "SKIP default-model",
-    ]
+    assert result.stdout.count("PASS") == 1
+    assert result.stdout.count("FAIL") == 1
+    assert result.stdout.count("SKIP") == 1
+    assert all(name in result.stdout for name in ("settings", "model-discovery", "default-model"))
     assert secret not in result.stderr
     assert "[REDACTED]" in result.stderr
     assert "Traceback" not in result.stderr
@@ -1058,13 +1196,16 @@ def test_doctor_reports_protocol_failure_and_missing_or_unavailable_default(
     missing = runner.invoke(app, ["doctor"])
 
     assert malformed_result.exit_code == 1
-    assert "FAIL model-discovery" in malformed_result.stdout
+    assert "FAIL" in malformed_result.stdout
+    assert "model-discovery" in malformed_result.stdout
     assert "Model registry data must be a list" in malformed_result.stderr
     assert unavailable.exit_code == 1
-    assert unavailable.stdout.endswith("FAIL default-model\n")
+    assert "FAIL" in unavailable.stdout
+    assert "default-model" in unavailable.stdout
     assert "Model 'model-a' is not available" in unavailable.stderr
     assert missing.exit_code == 1
-    assert missing.stdout.endswith("FAIL default-model\n")
+    assert "FAIL" in missing.stdout
+    assert "default-model" in missing.stdout
     assert "PHI_DEFAULT_MODEL is required" in missing.stderr
 
 
@@ -1085,6 +1226,7 @@ def test_doctor_redacts_credential_shaped_unavailable_default_model(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
-    assert result.stdout.endswith("FAIL default-model\n")
+    assert "FAIL" in result.stdout
+    assert "default-model" in result.stdout
     assert secret_model not in result.stderr
     assert "Model '[REDACTED]' is not available" in result.stderr
