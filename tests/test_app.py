@@ -50,7 +50,7 @@ from phi.tools import (
     tool,
 )
 from phi.ui.app import PhiApp
-from phi.ui.widgets import RunBoundaryView
+from phi.ui.widgets import ModelStepView, RunBoundaryView
 
 
 @dataclass
@@ -222,13 +222,19 @@ async def test_app_creates_session_and_sends_prompt_through_shared_service(
         await app.workers.wait_for_complete()
 
         transcript = app.query_one("#transcript")
-        assert "You" in str(transcript.query_one(".user-message").render())
-        assert "hello" in str(transcript.query_one(".user-message").render())
-        assert "Hello" in transcript.query_one(".assistant-message", Markdown).source
+        user_message = transcript.query_one(".user-message")
+        assistant_message = transcript.query_one(".assistant-message", Markdown)
+        assert str(user_message.render()) == "hello"
+        assert assistant_message.source == "Hello **from Phi**"
+        assert user_message.styles.background != assistant_message.styles.background
+        assert user_message.outer_size.height == 1
+        assert assistant_message.outer_size.height == 2
         boundary = transcript.query_one(RunBoundaryView)
         assert boundary.status_label is None
         assert boundary.time_label == "14:32"
         assert boundary.boundary_title == "14:32"
+        assert boundary.styles.margin.top == 0
+        assert boundary.styles.margin.bottom == 0
         assert "Last Run" not in str(app.query_one("#status-bar").render())
         assert "Ready" in str(app.query_one("#composer-hint").render())
 
@@ -1385,19 +1391,26 @@ async def test_partial_tool_json_stays_hidden_and_reasoning_is_collapsed(
         reasoning = app.query_one(".reasoning-message", Collapsible)
         assert reasoning.collapsed is True
         assert reasoning.display is True
+        assert reasoning.title == "Thinking…"
         assert "checking the file" in str(
             reasoning.query_one(".reasoning-content", Static).render()
         )
         assert "checking the file" not in app.query_one(".assistant-message", Markdown).source
-        transcript = app.query_one("#transcript")
+        step = app.query_one(".model-step", ModelStepView)
         assistant = app.query_one(".assistant-message", Markdown)
-        transcript_children = list(transcript.children)
-        assert transcript_children.index(reasoning) < transcript_children.index(assistant)
+        assert reasoning.parent is step
+        assert assistant.parent is step
+
+        await pilot.click(".reasoning-message CollapsibleTitle")
+        assert reasoning.collapsed is False
 
         model.release.set()
         await app.workers.wait_for_complete()
+        assert reasoning.title == "Reasoning"
+        assert reasoning.collapsed is False
         cards = list(app.query(".tool-call"))
         assert len(cards) == 1
+        assert cards[0].parent is step
         card_content = str(cards[0].query_one(".tool-call-content").render())
         assert "complete" in card_content
         assert "input.txt" in card_content
@@ -1716,11 +1729,13 @@ async def test_reopening_session_renders_durable_tool_result_and_reasoning(
         assert "durable answer" in second_app.query_one(".assistant-message", Markdown).source
         reasoning = second_app.query_one(".reasoning-message", Collapsible)
         assert reasoning.collapsed is True
-        transcript = second_app.query_one("#transcript")
         assistant = second_app.query_one(".assistant-message", Markdown)
-        transcript_children = list(transcript.children)
-        assert transcript_children.index(reasoning) < transcript_children.index(assistant)
         tool_card = second_app.query_one(".tool-call")
+        steps = list(second_app.query(ModelStepView))
+        assert len(steps) == 2
+        assert tool_card.parent is steps[0]
+        assert reasoning.parent is steps[1]
+        assert assistant.parent is steps[1]
         tool_content = str(tool_card.query_one(".tool-call-content").render())
         assert "complete" in tool_content
         assert "persisted result" in tool_content

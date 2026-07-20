@@ -64,10 +64,11 @@ Screen
 The presentation widget named `TranscriptView` dispatches Entry and Event types to focused widgets.
 “Transcript” is a UI label here, not a second canonical conversation data model:
 
-- `UserMessageView`;
-- `AssistantMessageView`, with Markdown and a lightweight collapsed `ReasoningView` immediately
-  above the content or Tool Call produced by the same Model Step;
-- `ToolCallView`, shown as a spinner during execution and updated in place on completion;
+- `UserMessageView`, rendered without a role label on a contrasting background;
+- `ModelStepView`, which groups one Model Step's optional collapsed `ReasoningView`, Markdown
+  `AssistantMessageView`, and `ToolCallView` children on the default background;
+- `ToolCallView`, shown inside its Model Step as a spinner during execution and updated in place on
+  completion;
 - `CompactionEntryView` as a structural summary marker;
 - `RunBoundaryView`, which renders successful completion as a muted horizontal rule centered on the
   local `HH:MM` completion time. Cancelled and Step-limited Runs include their outcome in the rule;
@@ -87,12 +88,14 @@ truncates safely at every width.
 
 ## Streaming
 
-The TUI subscribes to the shared Event bus:
+The TUI subscribes to the shared Event bus and routes each Step's Events through one
+`ModelStepView`:
 
-- `ContentDelta` appends to the current assistant view;
-- `ReasoningDelta` reveals and appends to the collapsed reasoning view immediately above it;
+- `ContentDelta` appends to the Step's assistant view;
+- the first `ReasoningDelta` reveals a collapsed `Thinking…` disclosure; completion relabels it
+  `Reasoning` without changing the user's expanded or collapsed choice;
 - partial Tool Call JSON is not rendered;
-- `ToolCallStarted` creates the tool card after assembly;
+- `ToolCallStarted` creates a tool card inside the same Step after assembly;
 - `ToolCallCompleted` updates that card with output or error.
 
 Streaming observation does not change the normalized response stored by the Harness.

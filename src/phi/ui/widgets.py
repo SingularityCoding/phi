@@ -19,6 +19,7 @@ from textual.widgets import (
     TextArea,
 )
 
+from phi.model import ContentDelta, ModelEvent, ModelResponse, ReasoningDelta, ToolCall, ToolResult
 from phi.sessions import redact_text
 
 
@@ -83,20 +84,22 @@ class TranscriptView(VerticalScroll):
 
 class UserMessageView(Static):
     def __init__(self, content: str) -> None:
-        super().__init__(f"You\n{content}", classes="user-message", markup=False)
+        super().__init__(content, classes="user-message", markup=False)
 
 
 class AssistantMessageView(Markdown):
     def __init__(self, content: str = "") -> None:
         self._content = content
         super().__init__(self._source(), classes="assistant-message")
+        self.display = bool(content)
 
     def _source(self) -> str:
-        return f"### Phi\n\n{self._content}"
+        return self._content
 
     def set_content(self, content: str) -> None:
         self._content = content
         self.update(self._source())
+        self.display = bool(content)
 
     def append_content(self, content: str) -> None:
         self.set_content(f"{self._content}{content}")
@@ -111,7 +114,7 @@ class ReasoningView(Collapsible):
     ReasoningView {
         width: 1fr;
         height: auto;
-        margin: 1 2 0 2;
+        margin: 0;
         padding: 0;
         border: none;
         background: transparent;
@@ -136,7 +139,7 @@ class ReasoningView(Collapsible):
     ReasoningView Contents {
         width: 100%;
         height: auto;
-        margin: 1 0 0 1;
+        margin: 0 0 0 1;
         padding: 0 0 0 1;
         border-left: solid $secondary;
     }
@@ -165,7 +168,13 @@ class ReasoningView(Collapsible):
         self.display = bool(content)
 
     def append_content(self, content: str) -> None:
+        self.title = "Thinking…"
         self.set_content(f"{self._content}{content}")
+
+    def complete(self, content: str | None = None) -> None:
+        if content is not None:
+            self.set_content(content)
+        self.title = "Reasoning"
 
     @property
     def is_empty(self) -> bool:
@@ -202,6 +211,84 @@ class ToolCallView(Vertical):
         )
 
 
+class ModelStepView(Vertical):
+    """One Model Step's reasoning, visible content, and Tool Calls."""
+
+    DEFAULT_CSS = """
+    ModelStepView {
+        width: 1fr;
+        height: auto;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+    }
+    """
+
+    def __init__(
+        self,
+        *,
+        content: str | None = None,
+        reasoning: str | None = None,
+        tool_calls: tuple[ToolCall, ...] = (),
+    ) -> None:
+        self._reasoning = ReasoningView(reasoning or "")
+        self._assistant = AssistantMessageView(content or "")
+        self._tool_views = {
+            call.id: ToolCallView(call.id, call.name, call.arguments) for call in tool_calls
+        }
+        live_placeholder = content is None and reasoning is None and not tool_calls
+        children = []
+        if reasoning or live_placeholder:
+            children.append(self._reasoning)
+        if content or live_placeholder:
+            children.append(self._assistant)
+        children.extend(self._tool_views.values())
+        super().__init__(
+            *children,
+            classes="model-step",
+        )
+
+    def apply_delta(self, delta: ModelEvent) -> None:
+        if isinstance(delta, ContentDelta):
+            self._assistant.append_content(delta.text)
+        elif isinstance(delta, ReasoningDelta):
+            self._reasoning.append_content(delta.text)
+
+    async def complete_response(self, response: ModelResponse) -> None:
+        if response.content is not None:
+            self._assistant.set_content(response.content)
+        self._reasoning.complete(response.reasoning)
+        await self._remove_empty_placeholders()
+
+    async def start_tool(self, call: ToolCall) -> None:
+        view = ToolCallView(call.id, call.name, call.arguments)
+        self._tool_views[call.id] = view
+        await self.mount(view)
+
+    def complete_tool(self, result: ToolResult) -> None:
+        view = self._tool_views.get(result.call_id)
+        if view is not None:
+            view.complete(result.output, result.error)
+
+    async def finish(self) -> None:
+        self._reasoning.complete()
+        await self._remove_empty_placeholders()
+
+    async def _remove_empty_placeholders(self) -> None:
+        if self._reasoning.is_empty and self._reasoning.is_mounted:
+            await self._reasoning.remove()
+        if self._assistant.is_empty and self._assistant.is_mounted:
+            await self._assistant.remove()
+
+    @property
+    def tool_call_ids(self) -> tuple[str, ...]:
+        return tuple(self._tool_views)
+
+    @property
+    def is_empty(self) -> bool:
+        return self._reasoning.is_empty and self._assistant.is_empty and not self._tool_views
+
+
 class CompactionEntryView(Static):
     def __init__(self, summary: str) -> None:
         super().__init__(
@@ -227,7 +314,7 @@ class RunBoundaryView(Static):
     RunBoundaryView {
         width: 1fr;
         height: 1;
-        margin: 1 2;
+        margin: 0 1;
         color: $text-muted;
         text-style: dim;
     }

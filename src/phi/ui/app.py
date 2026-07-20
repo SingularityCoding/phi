@@ -28,7 +28,7 @@ from phi.harness import (
     ToolCallStarted,
 )
 from phi.mcp import McpPrompt, McpPromptResult
-from phi.model import ContentDelta, ModelInfo, ReasoningDelta, ToolCall, ToolCallDelta
+from phi.model import ModelInfo, ToolCall
 from phi.sessions import (
     AssistantMessageEntry,
     CompactionEntry,
@@ -66,16 +66,14 @@ from phi.ui.screens import (
     SelectionScreen,
 )
 from phi.ui.widgets import (
-    AssistantMessageView,
     CompactionEntryView,
+    ModelStepView,
     PendingMessage,
     PromptInput,
     QueueDisposition,
     QueueMessageRow,
-    ReasoningView,
     RunBoundaryView,
     RunStatusView,
-    ToolCallView,
     TranscriptView,
     UserMessageView,
 )
@@ -119,8 +117,17 @@ class PhiApp(App[None]):
     }
     #status-bar.context-warning { color: $warning; }
     #transcript { height: 1fr; padding: 0 1; }
-    .user-message { margin: 1 0; padding: 1 2; background: $boost; }
-    .assistant-message { margin: 1 0; padding: 0 2; }
+    .user-message {
+        height: auto;
+        margin: 0;
+        padding: 0 1;
+        background: $boost;
+    }
+    .assistant-message {
+        margin: 0;
+        padding: 0 1;
+        background: transparent;
+    }
     .tool-call { margin: 1 2; padding: 1; border: round $accent; height: auto; }
     .tool-call-content { height: auto; }
     .tool-call-progress { height: 1; }
@@ -204,9 +211,7 @@ class PhiApp(App[None]):
         self._session_operation_active = False
         self._pending: list[PendingMessage] = []
         self._reported_diagnostics: set[str] = set()
-        self._assistant_views: dict[tuple[str, int], AssistantMessageView] = {}
-        self._reasoning_views: dict[tuple[str, int], ReasoningView] = {}
-        self._tool_views: dict[str, ToolCallView] = {}
+        self._step_views: dict[tuple[str, int], ModelStepView] = {}
         self._mcp_prompts: dict[str, McpPrompt] = {}
         self._context_inspection: ContextInspection | None = None
 
@@ -269,30 +274,25 @@ class PhiApp(App[None]):
         runtime, handle = self._require_session()
         transcript = self.query_one("#transcript", TranscriptView)
         await transcript.remove_children()
-        self._tool_views.clear()
+        tool_steps: dict[str, ModelStepView] = {}
         view = await materialize_presentation(runtime.storage, handle)
         for entry in view.entries:
             if isinstance(entry, UserMessageEntry):
                 await transcript.mount(UserMessageView(entry.content))
             elif isinstance(entry, AssistantMessageEntry):
-                await self._mount_assistant_entry(entry)
+                step = ModelStepView(
+                    content=entry.content,
+                    reasoning=entry.reasoning,
+                    tool_calls=entry.tool_calls,
+                )
+                await transcript.mount(step)
+                tool_steps.update(dict.fromkeys(step.tool_call_ids, step))
             elif isinstance(entry, ToolResultEntry):
-                tool_view = self._tool_views.get(entry.result.call_id)
-                if tool_view is not None:
-                    tool_view.complete(entry.result.output, entry.result.error)
+                step = tool_steps.get(entry.result.call_id)
+                if step is not None:
+                    step.complete_tool(entry.result)
             elif isinstance(entry, CompactionEntry):
                 await transcript.mount(CompactionEntryView(entry.summary))
-
-    async def _mount_assistant_entry(self, entry: AssistantMessageEntry) -> None:
-        transcript = self.query_one("#transcript", TranscriptView)
-        if entry.reasoning is not None:
-            await transcript.mount(ReasoningView(entry.reasoning))
-        if entry.content is not None:
-            await transcript.mount(AssistantMessageView(entry.content))
-        for call in entry.tool_calls:
-            view = ToolCallView(call.id, call.name, call.arguments)
-            self._tool_views[call.id] = view
-            await transcript.mount(view)
 
     async def on_prompt_input_submitted(self, message: PromptInput.Submitted) -> None:
         text = message.text
@@ -876,46 +876,27 @@ class PhiApp(App[None]):
         transcript = self.query_one("#transcript", TranscriptView)
         if isinstance(event, ModelCallStarted):
             key = (event.run_id, event.step_index)
-            assistant = AssistantMessageView()
-            reasoning = ReasoningView()
-            self._assistant_views[key] = assistant
-            self._reasoning_views[key] = reasoning
-            await transcript.mount(reasoning, assistant)
+            step = ModelStepView()
+            self._step_views[key] = step
+            await transcript.mount(step)
         elif isinstance(event, ModelCallDelta):
             key = (event.run_id, event.step_index)
-            if isinstance(event.delta, ContentDelta):
-                self._assistant_views[key].append_content(event.delta.text)
-            elif isinstance(event.delta, ReasoningDelta):
-                reasoning = self._reasoning_views[key]
-                reasoning.append_content(event.delta.text)
-            elif isinstance(event.delta, ToolCallDelta):
-                return
+            self._step_views[key].apply_delta(event.delta)
         elif isinstance(event, ModelCallCompleted):
             key = (event.run_id, event.step_index)
-            response = event.response
-            if response.content is not None:
-                self._assistant_views[key].set_content(response.content)
-            if response.reasoning is not None:
-                reasoning = self._reasoning_views[key]
-                reasoning.set_content(response.reasoning)
-            if response.content is None and self._assistant_views[key].is_empty:
-                await self._assistant_views[key].remove()
+            await self._step_views[key].complete_response(event.response)
         elif isinstance(event, ToolCallStarted):
-            view = ToolCallView(event.call.id, event.call.name, event.call.arguments)
-            self._tool_views[event.call.id] = view
-            await transcript.mount(view)
+            key = (event.run_id, event.step_index)
+            await self._step_views[key].start_tool(event.call)
         elif isinstance(event, ToolCallCompleted):
-            view = self._tool_views.get(event.call.id)
-            if view is not None:
-                view.complete(event.result.output, event.result.error)
+            key = (event.run_id, event.step_index)
+            self._step_views[key].complete_tool(event.result)
         elif isinstance(event, RunFinished):
-            for key in [key for key in self._assistant_views if key[0] == event.run_id]:
-                assistant = self._assistant_views.pop(key)
-                reasoning = self._reasoning_views.pop(key)
-                if assistant.is_empty and assistant.is_mounted:
-                    await assistant.remove()
-                if reasoning.is_empty and reasoning.is_mounted:
-                    await reasoning.remove()
+            for key in [key for key in self._step_views if key[0] == event.run_id]:
+                step = self._step_views.pop(key)
+                await step.finish()
+                if step.is_empty and step.is_mounted:
+                    await step.remove()
         transcript.scroll_end(animate=False)
 
     def action_cancel_run(self) -> None:
