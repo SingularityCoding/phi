@@ -1032,16 +1032,26 @@ def test_mcp_list_redacts_credentials_and_preserves_values_at_narrow_width(
     tmp_path: Path,
 ) -> None:
     _, project_path = _mcp_paths(monkeypatch, tmp_path)
-    secret = "super-secret-value"
+    command_secret = "multi word command secret"
+    option_secret = "multi word option secret"
+    assignment_secret = "multi word assignment secret"
+    environment_secret = "opaque-environment-secret"
     asyncio.run(
         save_mcp_config(
             project_path,
             McpConfig(
                 mcpServers={
                     "narrow-server": McpServerConfig(
-                        command="[bold]literal-\x1b[31m-command[/bold]",
-                        args=(f"api_key={secret}", "long-argument-TAIL-MARKER"),
-                        env={"SERVICE_CREDENTIAL": secret},
+                        command=f"api_key={command_secret}",
+                        args=(
+                            "[bold]literal-\x1b[31m-argument[/bold]",
+                            "--api-key",
+                            option_secret,
+                            f"api_key={assignment_secret}",
+                            environment_secret,
+                            "long-argument-TAIL-MARKER",
+                        ),
+                        env={"SERVICE_CREDENTIAL": environment_secret},
                         enabled=False,
                     )
                 }
@@ -1054,16 +1064,25 @@ def test_mcp_list_redacts_credentials_and_preserves_values_at_narrow_width(
 
     assert result.exit_code == 0
     assert "\x1b[" not in result.stdout
-    assert secret not in result.stdout
     compact = "".join(result.stdout.split())
+    assert all(
+        "".join(secret.split()) not in compact
+        for secret in (
+            command_secret,
+            option_secret,
+            assignment_secret,
+            environment_secret,
+        )
+    )
     assert all(
         value in compact
         for value in (
             "narrow-server",
             "project",
             "disabled",
-            r"[bold]literal-\x1b[31m-command[/bold]",
             "api_key=[REDACTED]",
+            r"[bold]literal-\x1b[31m-argument[/bold]",
+            "--api-key",
             "long-argument-TAIL-MARKER",
             "SERVICE_CREDENTIAL",
         )

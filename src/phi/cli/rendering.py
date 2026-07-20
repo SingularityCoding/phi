@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -20,6 +21,15 @@ from phi.mcp import ConfiguredMcpServer
 from phi.sessions import SessionHandle, redact_text
 
 _NARROW_RECORD_WIDTH = 100
+_CREDENTIAL_ARGUMENT_NAMES = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+}
 
 
 def _stream_is_terminal(stream: TextIO) -> bool:
@@ -76,7 +86,38 @@ def _literal_text(value: str, *, style: str | None = None) -> Text:
 def _redact_mcp_text(value: str, secrets: Sequence[str]) -> str:
     for secret in secrets:
         value = value.replace(secret, "[REDACTED]")
-    return redact_text(value, max_length=None)
+    redacted = redact_text(value, max_length=None)
+    return _redact_credential_assignment(redacted) or redacted
+
+
+def _is_credential_argument_name(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+    return normalized in _CREDENTIAL_ARGUMENT_NAMES or normalized.endswith(
+        ("_api_key", "_password", "_secret", "_token")
+    )
+
+
+def _redact_credential_assignment(value: str) -> str | None:
+    for separator in ("=", ":"):
+        name, found, _ = value.partition(separator)
+        if found and _is_credential_argument_name(name):
+            return f"{name}{separator}[REDACTED]"
+    return None
+
+
+def _redact_mcp_arguments(arguments: Sequence[str], secrets: Sequence[str]) -> str:
+    redacted: list[str] = []
+    redact_next = False
+    for argument in arguments:
+        if redact_next:
+            redacted.append("[REDACTED]")
+            redact_next = False
+            continue
+
+        safe_argument = _redact_mcp_text(argument, secrets)
+        redacted.append(safe_argument)
+        redact_next = _is_credential_argument_name(safe_argument)
+    return shlex.join(redacted)
 
 
 def _render_narrow_records(
@@ -198,7 +239,7 @@ def render_mcp_servers(
                 ("Command", _redact_mcp_text(config.command, secrets), None),
                 (
                     "Arguments",
-                    _redact_mcp_text(shlex.join(config.args), secrets) if config.args else "-",
+                    _redact_mcp_arguments(config.args, secrets) if config.args else "-",
                     None,
                 ),
                 ("Environment", ", ".join(sorted(config.env)) if config.env else "-", None),
