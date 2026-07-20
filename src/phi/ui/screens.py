@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -464,6 +465,8 @@ class ContextOverview(VerticalScroll):
 class ContextInspectorScreen(Screen[None]):
     """Full-screen read-only explorer for one immutable Model-request snapshot."""
 
+    EXPANDED_TOOL_LIMIT = 6
+
     CSS = """
     ContextInspectorScreen {
         layout: vertical;
@@ -632,6 +635,7 @@ class ContextInspectorScreen(Screen[None]):
     def __init__(self, inspection: ContextInspection) -> None:
         super().__init__()
         self.inspection = inspection
+        self._tool_names_by_call_id = self._index_tool_call_names(inspection.messages)
         self._first_content_node = None
 
     def compose(self) -> ComposeResult:
@@ -684,24 +688,102 @@ class ContextInspectorScreen(Screen[None]):
         tree = ContextContentsTree("Context contents", id="context-contents-tree")
         tree.show_root = False
         tree.root.expand()
-        instructions = tree.root.add("Instructions", expand=True)
+        instructions = tree.root.add(
+            self._group_label("Instructions", len(self.inspection.instructions)),
+            expand=True,
+        )
         for section in self.inspection.instructions:
-            node = instructions.add_leaf(f"{section.origin} · {section.inclusion}", section)
+            node = instructions.add_leaf(
+                Text.assemble(("◆ ", "cyan"), section.origin),
+                section,
+            )
             if self._first_content_node is None:
                 self._first_content_node = node
-        tools = tree.root.add("Tools", expand=True)
+        tools = tree.root.add(
+            self._group_label("Tools", len(self.inspection.tools)),
+            expand=len(self.inspection.tools) <= self.EXPANDED_TOOL_LIMIT,
+        )
         for item in self.inspection.tools:
-            tools.add_leaf(f"{item.name} · {item.inclusion}", item)
-        messages = tree.root.add("Messages", expand=True)
+            tools.add_leaf(Text.assemble(("• ", "magenta"), item.name), item)
+        messages = tree.root.add(
+            self._group_label("Messages", len(self.inspection.messages)),
+            expand=True,
+        )
         for item in self.inspection.messages:
-            messages.add_leaf(f"{item.label} · {item.inclusion}", item)
-        summary = tree.root.add("Dropped-history summary", expand=True)
-        if self.inspection.dropped_summary is None:
-            summary.add_leaf("None · no earlier Entries represented")
-        else:
+            messages.add_leaf(self._message_tree_label(item), item)
+        if self.inspection.dropped_summary is not None:
             item = self.inspection.dropped_summary
-            summary.add_leaf(f"Generated summary · {item.inclusion}", item)
+            summary = tree.root.add(self._group_label("Compaction", 1), expand=True)
+            summary.add_leaf(
+                Text.assemble(("◆ ", "yellow"), "Dropped-history summary"),
+                item,
+            )
         return tree
+
+    @staticmethod
+    def _group_label(title: str, count: int) -> Text:
+        return Text.assemble((title, "bold"), (f"  {count}", "dim"))
+
+    @staticmethod
+    def _index_tool_call_names(messages: tuple[InspectedMessage, ...]) -> dict[str, str]:
+        names: dict[str, str] = {}
+        for item in messages:
+            tool_calls = item.message.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, Mapping):
+                    continue
+                call_id = call.get("id")
+                function = call.get("function")
+                if not isinstance(call_id, str) or not isinstance(function, Mapping):
+                    continue
+                name = function.get("name")
+                if isinstance(name, str):
+                    names[call_id] = name
+        return names
+
+    def _message_identity(self, item: InspectedMessage) -> tuple[str, str, str, str]:
+        role = item.message.get("role")
+        if role == "user":
+            return "●", "User", "", "green"
+        if role == "assistant":
+            tool_names = self._assistant_tool_names(item.message)
+            suffix = f" · calls {', '.join(tool_names)}" if tool_names else ""
+            return "◆", "Assistant", suffix, "cyan"
+        if role == "tool":
+            call_id = item.message.get("tool_call_id")
+            tool_name = (
+                self._tool_names_by_call_id.get(call_id) if isinstance(call_id, str) else None
+            )
+            suffix = f" · {tool_name}" if tool_name is not None else ""
+            return "↳", "Tool result", suffix, "yellow"
+        return "•", str(role or "Unknown").title(), "", "white"
+
+    @staticmethod
+    def _assistant_tool_names(message: Mapping[str, object]) -> tuple[str, ...]:
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return ()
+        names: list[str] = []
+        for call in tool_calls:
+            if not isinstance(call, Mapping):
+                continue
+            function = call.get("function")
+            if not isinstance(function, Mapping):
+                continue
+            name = function.get("name")
+            if isinstance(name, str):
+                names.append(name)
+        return tuple(names)
+
+    def _message_tree_label(self, item: InspectedMessage) -> Text:
+        symbol, title, suffix, style = self._message_identity(item)
+        return Text.assemble(
+            (f"{item.index:02d}  ", "dim"),
+            (f"{symbol} {title}", style),
+            (suffix, "dim"),
+        )
 
     def _first_content_detail(self) -> str:
         return (
@@ -741,11 +823,10 @@ class ContextInspectorScreen(Screen[None]):
             document, ensure_ascii=False, indent=2, sort_keys=True
         )
 
-    @staticmethod
-    def _content_detail(item: ContextContentItem) -> str:
+    def _content_detail(self, item: ContextContentItem) -> str:
         if isinstance(item, InstructionSection):
             return (
-                f"Instruction origin: {item.origin}\n"
+                f"Instructions / {item.origin}\n\n"
                 f"Source: {item.source}\n"
                 f"Inclusion: {item.inclusion}\n"
                 f"Characters: {item.characters}\n\n"
@@ -753,7 +834,7 @@ class ContextInspectorScreen(Screen[None]):
             )
         if isinstance(item, InspectedTool):
             return (
-                f"Tool: {item.name}\n"
+                f"Tools / {item.name}\n\n"
                 f"Provenance: {item.provenance}\n"
                 f"Inclusion: {item.inclusion}\n"
                 f"Characters: {item.characters}\n"
@@ -762,8 +843,11 @@ class ContextInspectorScreen(Screen[None]):
                 f"{json.dumps(item.schema, ensure_ascii=False, indent=2, sort_keys=True)}"
             )
         if isinstance(item, InspectedMessage):
+            _symbol, title, suffix, _style = self._message_identity(item)
+            kind = item.label.rsplit(" ", maxsplit=1)[0]
             return (
-                f"{item.label}\n"
+                f"Messages / {item.index:02d} {title}{suffix}\n\n"
+                f"Type: {kind}\n"
                 f"Provenance: {item.provenance}\n"
                 f"Inclusion: {item.inclusion}\n"
                 f"Characters: {item.characters}\n\n"
@@ -773,7 +857,7 @@ class ContextInspectorScreen(Screen[None]):
                 f"{json.dumps(item.message, ensure_ascii=False, indent=2, sort_keys=True)}"
             )
         return (
-            "Generated dropped-history summary\n"
+            "Compaction / Dropped-history summary\n\n"
             f"Provenance: {item.provenance}\n"
             f"Inclusion: {item.inclusion}\n"
             f"Characters: {item.characters}\n\n"

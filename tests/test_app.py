@@ -462,31 +462,52 @@ async def test_context_command_opens_educational_request_explorer_without_mutati
         await pilot.press("2")
         await pilot.pause()
         assert views.active == "context-contents"
+        tree = app.screen.query_one("#context-contents-tree", Tree)
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "◆ Phi base"
         detail = str(app.screen.query_one("#context-content-detail").render())
         assert "Phi base" in detail
         assert "Stable · included" in detail
         assert "You are Phi" in detail
 
-        await pilot.press("down", "down")
+        await pilot.press("shift+left", "shift+down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label).startswith("Tools  ")
+        assert not tree.cursor_node.is_expanded
+        await pilot.press("space", "down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "• bash"
         detail = str(app.screen.query_one("#context-content-detail").render())
         assert "Tool Registry" in detail
         assert "Registered · included" in detail
         assert '"name": "bash"' in detail
 
-        await pilot.press("shift+left", "shift+down", "down", "down")
+        await pilot.press("shift+left", "space", "shift+down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "Messages  4"
+        await pilot.press("down", "down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "02  ◆ Assistant · calls missing-tool"
         detail = str(app.screen.query_one("#context-content-detail").render())
-        assert "Assistant Tool Calls" in detail
+        assert "Messages / 02 Assistant · calls missing-tool" in detail
         assert "Readable content" in detail
         assert "Tool Call: missing-tool" in detail
         assert '"arguments": "{\\"value\\":1}"' in detail
         await pilot.press("down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "03  ↳ Tool result · missing-tool"
         detail = str(app.screen.query_one("#context-content-detail").render())
         assert "Tool Result" in detail
         assert "unknown_tool: missing-tool" in detail
         await pilot.press("down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "04  ◆ Assistant"
         detail = str(app.screen.query_one("#context-content-detail").render())
         assert "Assistant message" in detail
         assert "answer" in detail
+        await pilot.press("down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "04  ◆ Assistant"
 
         await pilot.press("1")
         await pilot.pause()
@@ -912,15 +933,15 @@ async def test_manual_compaction_routes_focus_and_renders_structural_marker(
         assert "Dropped-history summary: included" in sources
         await pilot.press("2")
         await pilot.pause()
-        await pilot.press(
-            "shift+left",
-            "shift+down",
-            "shift+down",
-            "shift+down",
-            "down",
-        )
+        tree = app.screen.query_one("#context-contents-tree", Tree)
+        await pilot.press("shift+left", "shift+down", "shift+down", "shift+down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "Compaction  1"
+        await pilot.press("down")
+        assert tree.cursor_node is not None
+        assert str(tree.cursor_node.label) == "◆ Dropped-history summary"
         detail = str(app.screen.query_one("#context-content-detail").render())
-        assert "Generated dropped-history summary" in detail
+        assert "Compaction / Dropped-history summary" in detail
         assert "Generated · included" in detail
         assert "Earlier decisions were summarized." in detail
         await pilot.press("3")
