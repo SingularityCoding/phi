@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
-from textual.widgets import Button, Footer, Static, TextArea
+from textual.widgets import Button, Static, TextArea
 
 from phi.bootstrap import HostRuntime, build_interactive_runtime
 from phi.cli.model_selection import resolve_available_model
@@ -108,6 +108,15 @@ class PhiApp(App[None]):
 
     CSS = """
     Screen { layout: vertical; }
+    #status-bar {
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        color: $text-muted;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+    #status-bar.context-warning { color: $warning; }
     #transcript { height: 1fr; padding: 0 1; }
     .user-message { margin: 1 0; padding: 1 2; background: $boost; }
     .assistant-message { margin: 1 0; padding: 0 2; }
@@ -116,22 +125,46 @@ class PhiApp(App[None]):
     .tool-call-progress { height: 1; }
     .tool-call.failed, .run-status.failed { border: round $error; color: $error; }
     .compaction-entry { margin: 1 2; padding: 1; border: dashed $secondary; height: auto; }
-    #queue { height: auto; max-height: 10; }
+    #queue { height: auto; max-height: 6; }
     #command-completion {
         height: auto;
-        max-height: 10;
-        padding: 0 2;
-        background: $panel;
-        display: none;
-    }
-    .queue-row { height: auto; min-height: 3; padding: 0 1; }
-    .queued-message { width: 1fr; height: auto; }
-    .queue-row Button { width: auto; min-width: 8; margin: 0 0 0 1; }
-    #prompt { height: 5; border: round $accent; }
-    #status-bar {
-        height: 1;
+        max-height: 6;
+        margin: 0 1;
         padding: 0 1;
         background: $panel;
+        border-left: solid $secondary;
+        display: none;
+    }
+    .queue-row {
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        background: $panel;
+    }
+    .queued-message {
+        width: 1fr;
+        height: 1;
+        color: $text-muted;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+    .queue-row Button {
+        width: auto;
+        min-width: 0;
+        height: 1;
+        min-height: 1;
+        margin: 0 0 0 1;
+        padding: 0 1;
+        border: none;
+        background: transparent;
+    }
+    .queue-row Button:hover { background: $boost; }
+    .queue-row Button:focus { background: $boost; text-style: bold; }
+    #prompt { height: 3; border: round $accent; }
+    #composer-hint {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
@@ -166,7 +199,6 @@ class PhiApp(App[None]):
         self._run_generation = 0
         self._active_run_generation: int | None = None
         self._run_active = False
-        self._last_run_status: RunStatus | None = None
         self._draining = False
         self._session_operation_active = False
         self._pending: list[PendingMessage] = []
@@ -178,12 +210,12 @@ class PhiApp(App[None]):
         self._context_inspection: ContextInspection | None = None
 
     def compose(self) -> ComposeResult:
+        yield Static("Starting…", id="status-bar", markup=False)
         yield TranscriptView(id="transcript")
         yield Vertical(id="queue")
         yield Static("", id="command-completion")
-        yield PromptInput(id="prompt", placeholder="Ask Phi… (Shift+Enter for newline)")
-        yield Static("Starting…", id="status-bar", markup=False)
-        yield Footer()
+        yield PromptInput(id="prompt", placeholder="Ask Phi…")
+        yield Static("Starting…", id="composer-hint", markup=False)
 
     async def on_mount(self) -> None:
         try:
@@ -215,6 +247,7 @@ class PhiApp(App[None]):
         except Exception as error:
             self._show_error(f"Startup failed: {error}")
             self.query_one("#status-bar", Static).update("startup failed")
+            self.query_one("#composer-hint", Static).update("Startup failed · Ctrl+Q quit")
 
     async def _build_runtime(self) -> HostRuntime:
         if self._runtime_factory is not None:
@@ -275,19 +308,23 @@ class PhiApp(App[None]):
             await self._enqueue(text)
             return
         self._draining = True
+        self._update_composer_hint()
         self.run_worker(self._run_message(text), group="runs", exclusive=True)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "prompt":
             return
+        self.query_one("#prompt", PromptInput).resize_for_content()
         completion = self.query_one("#command-completion", Static)
         text = event.text_area.text.lstrip()
         if not text.startswith("/") or " " in text or "\n" in text:
             completion.display = False
+            self._update_composer_hint()
             return
         matches = [name for name in self._command_names() if name.startswith(text)]
         completion.update("\n".join(matches) if matches else "No matching slash commands")
         completion.display = True
+        self._update_composer_hint()
 
     def _command_names(self) -> tuple[str, ...]:
         static = set(BUILTIN_COMMANDS)
@@ -309,6 +346,7 @@ class PhiApp(App[None]):
         self._pending.append(pending)
         row = QueueMessageRow(pending)
         await self.query_one("#queue", Vertical).mount(row)
+        self._update_composer_hint()
         if pending not in self._pending and row.is_mounted:
             await row.remove()
 
@@ -333,6 +371,7 @@ class PhiApp(App[None]):
                 pending.disposition = QueueDisposition.QUEUE
                 pending.target_run_generation = None
             self.query_one(f"#pending-{pending.id}", QueueMessageRow).refresh_pending(pending)
+            self._update_composer_hint()
             if pending.disposition is QueueDisposition.QUEUE:
                 await self._start_pending_drain()
         elif action == "edit":
@@ -346,6 +385,7 @@ class PhiApp(App[None]):
         rows = self.query(f"#pending-{pending.id}").nodes
         if rows:
             await rows[0].remove()
+        self._update_composer_hint()
 
     async def _start_pending_drain(self) -> None:
         if self._draining or self._shutting_down:
@@ -380,6 +420,7 @@ class PhiApp(App[None]):
             return
         if session_operation:
             self._session_operation_active = True
+            self._update_composer_hint()
         try:
             runtime, handle = self._require_session()
             if command == "/new":
@@ -437,6 +478,7 @@ class PhiApp(App[None]):
                         f"Origin: {metadata.origin}",
                         f"Parent Session: {metadata.parent_session_id or '-'}",
                         f"Fork point: {metadata.fork_point_entry_id or '-'}",
+                        f"Workspace: {self.cwd}",
                         f"Session file: {handle.session_file}",
                     )
                 )
@@ -547,6 +589,7 @@ class PhiApp(App[None]):
         finally:
             if session_operation:
                 self._session_operation_active = False
+                self._update_composer_hint()
 
     async def _select_session(self, runtime: HostRuntime) -> str | None:
         handles = await list_session_handles(runtime.storage)
@@ -664,6 +707,7 @@ class PhiApp(App[None]):
                 next_text = None if self._shutting_down else await self._take_next_pending()
         finally:
             self._draining = False
+            self._update_composer_hint()
 
     async def _run_one_message(self, text: str) -> None:
         runtime, handle = self._require_session()
@@ -705,7 +749,6 @@ class PhiApp(App[None]):
             self.current_session = updated
             if self._shutting_down:
                 return
-            self._last_run_status = result.status
             self._report_diagnostics(updated.diagnostics)
             self._show_run_status(result.status, result.error)
 
@@ -713,7 +756,6 @@ class PhiApp(App[None]):
         try:
             await self._active_run_task
         except Exception as error:
-            self._last_run_status = RunStatus.FAILED
             persisted = False
             if user_view.is_mounted:
                 await user_view.remove()
@@ -894,29 +936,27 @@ class PhiApp(App[None]):
         if self.current_session is None:
             return
         metadata = self.current_session.metadata
-        identity = metadata.name or metadata.id
-        state = "running" if self._run_active else "idle"
-        if not self._run_active and self._last_run_status is not None:
-            state = f"{state} · Last Run {self._last_run_status.value}"
+        identity = metadata.name or metadata.id[:8]
+        model = metadata.model or "-"
         approval = (
             self._runtime.approval_policy.approval_mode_name
             if self._runtime is not None and self._runtime.approval_policy is not None
             else "unavailable"
         )
         width = self.size.width
-        context = self._context_status(width < 70)
-        if width < 70:
-            text = f"{state} · {context} · Model {metadata.model or '-'}"
-        elif width < 120:
-            text = f"{state} · {context} · Model {metadata.model or '-'} · Approval {approval}"
+        context = self._context_status(compact=width < 70, detailed=width >= 120)
+        if width < 55:
+            text = f"Model {model} · {context}"
+        elif width < 80:
+            text = f"Model {model} · {context} · Approval {approval}"
         else:
-            text = (
-                f"{state} · {context} · Model {metadata.model or '-'} · Session {identity} · "
-                f"Approval {approval} · {self.cwd}"
-            )
-        self.query_one("#status-bar", Static).update(text)
+            text = f"Session {identity} · Model {model} · {context} · Approval {approval}"
+        status = self.query_one("#status-bar", Static)
+        status.update(text)
+        status.set_class(self._context_near_safe_limit(), "context-warning")
+        self._update_composer_hint()
 
-    def _context_status(self, compact: bool) -> str:
+    def _context_status(self, *, compact: bool, detailed: bool) -> str:
         label = "Ctx" if compact else "Context"
         if self._run_active:
             return f"{label} updating…"
@@ -929,10 +969,44 @@ class PhiApp(App[None]):
         if limit is None or utilization is None:
             return f"{label} ~{estimate} · limit unknown"
         safe = inspection.safe_prompt_limit
-        return (
-            f"{label} ~{estimate}/{limit} ({utilization:.1f}%) · "
-            f"safe {safe if safe is not None else 'unknown'}"
-        )
+        warning = ""
+        if safe is not None and estimate >= safe:
+            warning = " · over safe limit"
+        elif safe is not None and estimate >= safe * 0.8:
+            warning = " · near safe limit"
+        if detailed:
+            return (
+                f"{label} ~{estimate}/{limit} ({utilization:.1f}%) · "
+                f"safe {safe if safe is not None else 'unknown'}{warning}"
+            )
+        return f"{label} {utilization:.1f}%{warning}"
+
+    def _context_near_safe_limit(self) -> bool:
+        if self._run_active or self._context_inspection is None:
+            return False
+        safe = self._context_inspection.safe_prompt_limit
+        return safe is not None and self._context_inspection.estimate.tokens >= safe * 0.8
+
+    def _update_composer_hint(self) -> None:
+        hints = self.query("#composer-hint")
+        if not hints:
+            return
+        prompt_nodes = self.query("#prompt")
+        prompt_text = prompt_nodes.first(PromptInput).text.lstrip() if prompt_nodes else ""
+        if prompt_text.startswith("/") and "\n" not in prompt_text:
+            text = "Command · Enter run · Ctrl+P palette"
+        elif self._session_operation_active:
+            text = "Updating Session…"
+        elif self._run_active or self._draining:
+            pending = f" · {len(self._pending)} pending" if self._pending else ""
+            state = "Running" if self._run_active else "Starting Run"
+            follow_up = "Enter queues" if self.size.width < 70 else "Enter queues a follow-up"
+            text = f"{state}{pending} · {follow_up} · Esc cancel"
+        elif self.size.width < 72:
+            text = "Ready · Enter send · Shift+Enter newline"
+        else:
+            text = "Ready · Enter send · Shift+Enter newline · / commands · Ctrl+P palette"
+        hints.first(Static).update(text)
 
     async def _refresh_context_inspection(self) -> None:
         runtime, handle = self._require_session()
@@ -948,6 +1022,9 @@ class PhiApp(App[None]):
 
     def on_resize(self) -> None:
         self._update_status()
+        prompt_nodes = self.query("#prompt")
+        if prompt_nodes:
+            self.call_after_refresh(prompt_nodes.first(PromptInput).resize_for_content)
 
     def _report_diagnostics(self, diagnostics: tuple[object, ...]) -> None:
         for diagnostic in diagnostics:

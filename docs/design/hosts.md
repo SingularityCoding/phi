@@ -53,10 +53,12 @@ Exit codes for `phi run`:
 
 ```text
 Screen
+├── StatusBar
 ├── TranscriptView (scrollable, fills remaining space)
 ├── queued-message area
+├── slash-command completion
 ├── PromptInput (multiline)
-└── StatusBar
+└── ComposerHint
 ```
 
 The presentation widget named `TranscriptView` dispatches Entry and Event types to focused widgets.
@@ -71,13 +73,17 @@ The presentation widget named `TranscriptView` dispatches Entry and Event types 
   local `HH:MM` completion time. Cancelled and Step-limited Runs include their outcome in the rule;
   failures remain explicit error cards.
 
-The status bar shows model, Session name/ID, cwd, idle/running state, and a live estimated Context
-capacity signal. The signal uses the shared Context inspection result: `~` marks the Token Estimate,
-the percentage is relative to the effective input limit, and the safe prompt limit is shown
-separately. While a Run is active it reads `updating`; after a Run or Session-changing command it is
+The top status bar keeps durable orientation separate from input affordances. It shows the Session
+name or a shortened ID, selected Model, Approval mode, and a live estimated Context-capacity signal.
+The normal signal is the utilization percentage relative to the effective input limit. Terminals at
+least 120 columns wide additionally show the Token Estimate, effective limit, and safe prompt limit;
+`~` marks the estimate. Below 80 and 55 columns, first Session and then Approval are progressively
+omitted. The workspace path is available through `/session` rather than occupying the persistent
+bar. While a Run is active Context reads `updating`; after a Run or Session-changing command it is
 rebuilt from the current immutable handle. If the effective limit is unknown, the Host shows the
-estimated token count and `limit unknown` without inventing a percentage. Less essential status
-fields are omitted as terminal width narrows, and the one-line bar truncates safely.
+estimated token count and `limit unknown` without inventing a percentage. Approaching 80% of the
+safe prompt limit adds an explicit warning label and semantic warning color. The one-line bar
+truncates safely at every width.
 
 ## Streaming
 
@@ -93,14 +99,22 @@ Streaming observation does not change the normalized response stored by the Harn
 
 ## Prompt input, Queue, and Steer
 
-The Prompt is a multiline TextArea:
+The Prompt is a multiline TextArea. It is three rows tall for a one-line draft, grows with hard or
+soft-wrapped content, and stops at eight rows so the Transcript retains useful space:
 
 - Enter submits;
 - Shift+Enter inserts a newline;
 - `/` opens slash-command completion;
 - Escape cancels the active Run through `asyncio.Task.cancel()`.
 
-While a Run is active, submitted follow-ups appear in a queue above the Prompt. Each may be edited,
+The main Screen does not render Textual's persistent Footer. A one-line Composer hint exposes only
+the controls relevant to the current state: send/newline/command discovery while idle; Queue and
+cancel behavior while a Run is active; and command execution while slash completion is visible.
+`Ctrl+P` still opens the command palette and `Ctrl+Q` still quits. Run completion remains visible in
+the Transcript boundary rather than being repeated indefinitely in either persistent bar.
+
+While a Run is active, submitted follow-ups appear in a compact, single-line queue above the Prompt.
+Embedded newlines are folded into the preview and long content truncates safely. Each may be edited,
 removed, or marked as:
 
 - **queue** — send as a new request after the active Run ends;
@@ -115,6 +129,10 @@ message is sent.
 An ordinary queued message remains editable or removable and is not a Session Entry until the Host
 actually sends it. Discarding queued user input requires an explicit remove action rather than Run
 cancellation.
+
+Slash-command completion is capped at six rows. It remains immediately above the Prompt, uses the
+Composer hint for its execution affordance, and disappears as soon as the draft is no longer a
+single slash-command token.
 
 ## Slash commands
 

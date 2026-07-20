@@ -38,6 +38,9 @@ class PendingMessage:
 class PromptInput(TextArea):
     """Multiline request editor whose plain Enter submits."""
 
+    MIN_HEIGHT = 3
+    MAX_HEIGHT = 8
+
     class Submitted(Message):
         def __init__(self, text: str) -> None:
             super().__init__()
@@ -55,6 +58,14 @@ class PromptInput(TextArea):
         text = self.text
         self.load_text("")
         self.post_message(self.Submitted(text))
+
+    def resize_for_content(self) -> None:
+        """Grow with wrapped content while preserving transcript space."""
+        content_height = max(1, self.virtual_size.height)
+        self.styles.height = min(
+            max(content_height + 2, self.MIN_HEIGHT),
+            self.MAX_HEIGHT,
+        )
 
 
 class TranscriptView(VerticalScroll):
@@ -255,7 +266,9 @@ class QueueMessageRow(Horizontal):
 
     @staticmethod
     def _label(pending: PendingMessage) -> str:
-        return f"Pending · {pending.disposition.value}\n{pending.text}"
+        disposition = "Queue" if pending.disposition is QueueDisposition.QUEUE else "Steer"
+        preview = " ".join(pending.text.split())
+        return f"{disposition} · {preview}"
 
     def refresh_pending(self, pending: PendingMessage) -> None:
         self.query_one(f"#queued-text-{pending.id}", Static).update(self._label(pending))

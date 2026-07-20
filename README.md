@@ -93,9 +93,11 @@ Configure `PHI_API_KEY` and `PHI_DEFAULT_MODEL` in `.env`, then start the intera
 uv run phi
 ```
 
-Enter submits; Shift+Enter inserts a newline; Escape cancels only the active Run. Type `/` to see
-the built-in commands and currently loaded Skill and MCP Prompt commands. Pending messages remain
-editable and removable until they are dispatched, and can be switched between Queue and Steer.
+The input grows from three to eight rows as a draft wraps. Enter submits; Shift+Enter inserts a
+newline; Escape cancels only the active Run. Type `/` to see the built-in commands and currently
+loaded Skill and MCP Prompt commands, or use Ctrl+P for the command palette. The hint below the
+input changes with the current interaction state. Pending messages appear as compact editable rows
+until they are dispatched and can be switched between Queue and Steer.
 
 For a headless Run, pass a quoted task:
 

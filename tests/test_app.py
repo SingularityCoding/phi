@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import SecretStr
 from textual.widgets import (
     Collapsible,
+    Footer,
     LoadingIndicator,
     Markdown,
     ProgressBar,
@@ -203,7 +204,18 @@ async def test_app_creates_session_and_sends_prompt_through_shared_service(
         await pilot.pause()
         assert app.current_session is not None
         session_id = app.current_session.session_id
-        assert "model-a" in str(app.query_one("#status-bar").render())
+        status = str(app.query_one("#status-bar").render())
+        assert "model-a" in status
+        assert "Session" in status
+        assert "safe" not in status
+        assert str(workspace) not in status
+        assert not app.query(Footer)
+        prompt = app.query_one("#prompt", TextArea)
+        composer_hint = app.query_one("#composer-hint")
+        assert app.query_one("#status-bar").region.y < app.query_one("#transcript").region.y
+        assert prompt.region.y < composer_hint.region.y
+        assert prompt.outer_size.height == 3
+        assert "Ready" in str(composer_hint.render())
         await pilot.click("#prompt")
         await pilot.press("h", "e", "l", "l", "o", "enter")
         await pilot.pause()
@@ -217,7 +229,8 @@ async def test_app_creates_session_and_sends_prompt_through_shared_service(
         assert boundary.status_label is None
         assert boundary.time_label == "14:32"
         assert boundary.boundary_title == "14:32"
-        assert "Last Run completed" in str(app.query_one("#status-bar").render())
+        assert "Last Run" not in str(app.query_one("#status-bar").render())
+        assert "Ready" in str(app.query_one("#composer-hint").render())
 
         storage = SessionStorage(factory.settings.session_dir)
         view = await materialize_conversation(
@@ -239,7 +252,7 @@ async def test_context_status_tracks_known_capacity_and_active_run(tmp_path: Pat
     factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
     app = PhiApp(cwd=workspace, runtime_factory=factory)
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(128, 24)) as pilot:
         await pilot.pause()
         initial = str(app.query_one("#status-bar").render())
         assert "Context ~" in initial
@@ -257,7 +270,7 @@ async def test_context_status_tracks_known_capacity_and_active_run(tmp_path: Pat
         await app.workers.wait_for_complete()
         refreshed = str(app.query_one("#status-bar").render())
         assert "Context updating" not in refreshed
-        assert "Last Run completed" in refreshed
+        assert "Last Run" not in refreshed
         assert refreshed != initial
         grown_match = re.search(r"Context ~(\d+)", refreshed)
         assert grown_match is not None
@@ -319,6 +332,24 @@ async def test_context_status_and_explorer_are_honest_when_capacity_is_unknown(
         await pilot.press("escape")
 
 
+async def test_context_status_warns_as_the_safe_limit_approaches(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    factory = TuiRuntimeFactory(
+        tmp_path,
+        _settings(tmp_path),
+        ScriptedModel([]),
+        available_models=(ModelInfo("model-a", 18_000),),
+    )
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        status = app.query_one("#status-bar", Static)
+        assert "safe limit" in str(status.render())
+        assert status.has_class("context-warning")
+
+
 async def test_session_commands_replace_the_current_immutable_handle(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -365,7 +396,7 @@ async def test_follow_up_messages_are_visible_and_run_in_fifo_order(tmp_path: Pa
     factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
     app = PhiApp(cwd=workspace, runtime_factory=factory)
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(56, 24)) as pilot:
         await pilot.pause()
         prompt = app.query_one("#prompt", TextArea)
         prompt.load_text("first")
@@ -375,7 +406,13 @@ async def test_follow_up_messages_are_visible_and_run_in_fifo_order(tmp_path: Pa
         prompt.load_text("second")
         await pilot.press("enter")
         await pilot.pause()
-        assert "second" in str(app.query_one(".queued-message").render())
+        queued = app.query_one(".queued-message")
+        assert str(queued.render()) == "Queue · second"
+        assert app.query_one(".queue-row").outer_size.height == 1
+        hint = str(app.query_one("#composer-hint").render())
+        assert "1 pending" in hint
+        assert "Enter queues" in hint
+        assert "Esc cancel" in hint
 
         model.release.set()
         await app.workers.wait_for_complete()
@@ -384,6 +421,7 @@ async def test_follow_up_messages_are_visible_and_run_in_fifo_order(tmp_path: Pa
             {"role": "user", "content": "second"},
         ]
         assert list(app.query(".queued-message")) == []
+        assert "Ready" in str(app.query_one("#composer-hint").render())
 
         assert app.current_session is not None
         storage = SessionStorage(factory.settings.session_dir)
@@ -652,6 +690,7 @@ Use this trusted draft instruction.
         prompt.load_text("/")
         await pilot.pause()
         assert "/draft" in str(app.query_one("#command-completion").render())
+        assert "Command" in str(app.query_one("#composer-hint").render())
 
         prompt.load_text("/draft")
         await pilot.press("enter")
@@ -736,6 +775,7 @@ async def test_session_metadata_and_exact_fork_commands_use_session_services(
         assert source_id in metadata
         assert fork_point in metadata
         assert "model-a" in metadata
+        assert str(workspace) in metadata
         await pilot.press("escape")
         await app.workers.wait_for_complete()
 
@@ -1245,17 +1285,27 @@ async def test_multiline_submission_and_whitespace_rejection(tmp_path: Path) -> 
         assert app.current_session is not None
         revision = app.current_session.revision
         prompt = app.query_one("#prompt", TextArea)
+        assert prompt.outer_size.height == 3
+        prompt.load_text("\n".join(str(index) for index in range(12)))
+        await pilot.pause()
+        assert prompt.outer_size.height == 8
+        prompt.load_text("")
+        await pilot.pause()
+        assert prompt.outer_size.height == 3
+
         prompt.load_text("  \n ")
         await pilot.press("enter")
         await pilot.pause()
         assert app.current_session.revision == revision
         assert model.requests == []
+        assert prompt.outer_size.height == 3
 
         prompt.load_text("first line")
         prompt.cursor_location = (0, len("first line"))
         await pilot.press("shift+enter")
         await pilot.press("s", "e", "c", "o", "n", "d")
         assert prompt.text == "first line\nsecond"
+        assert prompt.outer_size.height == 4
         await pilot.press("enter")
         await app.workers.wait_for_complete()
         assert model.requests[0].messages[-1] == {
