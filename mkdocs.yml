@@ -83,9 +83,19 @@ nav:
           - 准备度检查: prework/async-lab/readiness-check.md
   - Chapters:
       - 章节总览: chapters/index.md
-      - "01 · Model Boundary": chapters/01-model-boundary.md
-      - "02 · Tool Round Trip": chapters/02-tool-round-trip.md
+      - "00 · 开场": chapters/00-orientation.md
+      - "01 · Model 边界": chapters/01-model-boundary.md
+      - "02 · Tool 边界": chapters/02-tool-boundary.md
       - "03 · Agent Loop": chapters/03-agent-loop.md
+      - "04 · Context Engineering": chapters/04-context-engineering.md
+      - "05 · Session 持久化与分支": chapters/05-sessions.md
+      - "06 · Safety & Approval": chapters/06-safety-approval.md
+      - "07 · MCP": chapters/07-mcp.md
+      - "08 · Hooks & Skills": chapters/08-hooks-skills.md
+      - "09 · Multi-agent": chapters/09-multi-agent.md
+      - "10 · Events & Tracing": chapters/10-events-tracing.md
+      - "11 · Hosts": chapters/11-hosts.md
+      - "12 · 工业界 Agent 还差什么": chapters/12-industry-frontier.md
   - Appendix:
       - 环境准备: appendix/setup.md
 

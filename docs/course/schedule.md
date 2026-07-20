@@ -2,39 +2,40 @@
 
 正课前，所有学生都需要通过 [Async Readiness Check](prework/async-lab/readiness-check.md)。
 已有异步编程经验的学生可以直接参加检查；其他学生先完成
-[课前 Async Lab](prework/async-lab/index.md)。下面是课程站原型使用的章节节奏，最终授课
-时长和课堂切口会在 Phi Reference 稳定后确定。
+[课前 Async Lab](prework/async-lab/index.md)。
 
-| 阶段 | Chapter | 主题 | 主要产出 |
+这份安排按内容顺序组织，不按课时切分——具体怎么分成几次课、每次多久，取决于实际授课节奏，这里不
+预设。顺序本身是有依据的：前三章现场手写，把最核心的"模型边界 → 工具边界 → Agent Loop"跑通一遍；
+从第四章开始不再写代码，按"跑通的循环接下来会遇到什么问题"这个逻辑，一章一章带出 Context、
+Session、Safety 等能力，每章都读 Phi 对应模块的真实实现；最后一章反过来，看看即便是 Phi 也主动选
+择不做的事。
+
+| Chapter | 主题 | 形式 | 对照的 Phi 模块 |
 | --- | --- | --- | --- |
-| Pre-course | — | Python Async Lab | coroutine、Tasks、streaming、cancellation readiness |
-| Foundations | [01](chapters/01-model-boundary.md) | Model Boundary | 归一化类型、Model Protocol、Scripted Model |
-| Tools | [02](chapters/02-tool-round-trip.md) | Tool Round Trip | Registry、参数校验、Dispatcher、Tool Result |
-| Harness | [03](chapters/03-agent-loop.md) | Agent Loop | Run、Step、Events、停止原因 |
-| State | 04 | Sessions & Context | Conversation View、Context projection、compaction |
-| Safety | 05 | Environment & Approval | confinement、timeout、approval、failure policy |
-| Integration | 06 | Hosts & Runtime | Typer CLI、Textual TUI、shared services |
-| Capstone | 07 | Complete Agent | 端到端任务、Trace 与 Environment eval |
-
-## 一个 Chapter 的课堂节奏
-
-<div class="phi-timeline" markdown>
-  <div markdown><span>00–20 min</span><strong>观察与拆解</strong><p>运行已经准备好的行为样例，先建立完整心智模型。</p></div>
-  <div markdown><span>20–50 min</span><strong>协议与不变量</strong><p>阅读输入输出形状，讨论失败时 Harness 应如何决策。</p></div>
-  <div markdown><span>50–110 min</span><strong>实现</strong><p>完成一个小而关键的代码切口，持续运行本章测试。</p></div>
-  <div markdown><span>110–130 min</span><strong>故障实验</strong><p>注入非法响应、未知工具或步数耗尽，观察系统行为。</p></div>
-  <div markdown><span>130–150 min</span><strong>回顾</strong><p>解释边界、记录取舍，并为下一章整理代码。</p></div>
-</div>
+| — | Python Async Lab（课前） | 自己动手 | — |
+| [00](chapters/00-orientation.md) | 开场：Phi 全景演示 + Python 并发回顾 | 演示 + 回顾 | — |
+| [01](chapters/01-model-boundary.md) | Model 边界 | 现场手写 | `phi/model/` |
+| [02](chapters/02-tool-boundary.md) | Tool 边界 | 现场手写 | `phi/tools/` |
+| [03](chapters/03-agent-loop.md) | Agent Loop | 现场手写 | `phi/harness/run.py` |
+| [04](chapters/04-context-engineering.md) | Context Engineering | 概念 + 对照阅读 | `phi/harness/compaction.py` |
+| [05](chapters/05-sessions.md) | Session 持久化与分支 | 概念 + 对照阅读 | `phi/sessions/` |
+| [06](chapters/06-safety-approval.md) | Safety & Approval | 概念 + 对照阅读 | `phi/tools/approval.py`、`phi/environment/` |
+| [07](chapters/07-mcp.md) | MCP | 概念 + 对照阅读 | `phi/mcp/` |
+| [08](chapters/08-hooks-skills.md) | Hooks & Skills | 概念 + 对照阅读 | `phi/harness/hooks.py`、`phi/skills/` |
+| [09](chapters/09-multi-agent.md) | Multi-agent | 概念 + 对照阅读 | `phi/agents/` |
+| [10](chapters/10-events-tracing.md) | Events & Tracing | 概念 + 对照阅读 | `phi/harness/events.py`、`phi/sessions/trace.py` |
+| [11](chapters/11-hosts.md) | Hosts | 概念 + 对照阅读 | `phi/cli/`、`phi/ui/` |
+| [12](chapters/12-industry-frontier.md) | 工业界 Agent 还差什么 | 讨论收尾 | `phi/docs/deferred.md` |
 
 ## 课程版本原则
 
-课程章节固定到一个稳定的 Phi release。Reference 后续演进不会悄悄改变正在进行中的课程：
+章节内容固定到一个稳定的 Phi release。Phi 本体后续演进不会悄悄改变正在进行中的课程：
 
 ```text
-Phi Reference release
-        │
-        ├── Course site version
-        └── Starter repository version
+Phi release
+    │
+    ├── 课程站内容（04–12 章对照阅读的对象）
+    └── mini-agent 仓库（01–03 章现场构建的对象）
 ```
 
-课程网站和 Starter Repository 会明确标出它们共同对应的 release。
+课程网站和 `mini-agent` 仓库会明确标出它们对应的 Phi release。
