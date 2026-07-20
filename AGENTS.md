@@ -7,7 +7,31 @@ workspace, but it is an independent Git repository with its own dependencies and
 commands from this repository root and do not modify or synchronize sibling projects unless the
 user explicitly asks.
 
-Phi is being developed in two stages. The first stage focuses on building a nearly complete, well-architected, testable, and maintainable Agent reference implementation without prematurely simplifying it for teaching. Once that implementation is stable, the second stage will adapt it into a course by removing selected key components for students to implement, based on factors such as class size, student background, learning objectives, and course duration. The resulting course materials, exercises, and assessment criteria will be published in a separate GitHub repository. Phi is currently in the first stage, where the priority is completing the reference Agent rather than creating the student version.
+Phi is developed in two stages. The first stage built a nearly complete, well-architected,
+testable, and maintainable Agent reference implementation without prematurely simplifying it for
+teaching. **That stage is now substantially complete**: the reference implementation is functional
+end to end. Remaining stage-1 work is limited to incidental feature adjustments and fixes, not new
+capability areas, and should not block stage-2 work.
+
+**The project's priority has switched to the second stage**: adapting the reference into a course
+by removing selected key components for students to implement. Course materials, exercises, and
+assessment criteria are designed inside this repository (`docs/course/`, `docs/course-design.md`)
+and will be published to a separate GitHub repository once stable. When a task could be framed as
+either "improve the reference implementation" or "shape it for the course," default to the course
+framing unless the user asks for a stage-1 fix.
+
+### Current course parameters
+
+- 8 students. Python background, and prior hands-on experience with agentic coding tools (e.g.
+  Claude Code, Codex-style CLIs). Do not design exercises or explanations that re-teach basic
+  Python syntax or "what is an AI coding agent" — start from Harness internals.
+- Two sessions, 3 hours each (6 hours total). Course materials must fit this budget.
+  `docs/course/schedule.md`'s current per-chapter pacing (7 chapters at roughly 2.5 hours each,
+  about 17.5 hours) assumes far more time than is available; stage-2 work must decide what to cut,
+  compress, or move to optional/take-home material rather than porting that chapter list as-is.
+- Course design work — chapter scoping, starter-repo contents, exercise selection, and test
+  design — is the priority. Changes to `src/phi/` should be small, targeted, and justified by what
+  the course design needs, not by adding new reference capabilities.
 
 The central definition is:
 
@@ -30,8 +54,8 @@ Use these sources according to their role:
 | `docs/design/*.md` | Long-lived design contracts for each capability |
 | `docs/roadmap.md` | What exists now, what comes next, and v1 completion criteria |
 | `README.md` | User-facing claims about behavior available now |
-| `docs/course/` | Teaching prototype; not engineering-design authority |
-| `docs/course-design.md` | Historical course-first input; not current design authority |
+| `docs/course/` | Active stage-2 course design surface (chapters, schedule, syllabus); not engineering-design authority for `src/phi/` |
+| `docs/course-design.md` | Historical course-first draft, superseded by `docs/course/`; useful background, not current design authority |
 
 Read the relevant design document before implementing its capability. A design document describes
 the destination, not proof that the code exists. When docs disagree, prefer code and tests, then
