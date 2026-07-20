@@ -46,10 +46,19 @@ class PromptInput(TextArea):
             super().__init__()
             self.text = text
 
+    class CompletionRequested(Message):
+        def __init__(self, prompt: PromptInput) -> None:
+            super().__init__()
+            self.prompt = prompt
+
     BINDINGS = [
+        Binding("tab", "request_completion", priority=True),
         Binding("shift+enter", "newline", priority=True),
         Binding("enter", "submit", priority=True),
     ]
+
+    def action_request_completion(self) -> None:
+        self.post_message(self.CompletionRequested(self))
 
     def action_newline(self) -> None:
         self.insert("\n", maintain_selection_offset=False)

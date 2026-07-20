@@ -105,6 +105,7 @@ soft-wrapped content, and stops at eight rows so the Transcript retains useful s
 - Enter submits;
 - Shift+Enter inserts a newline;
 - `/` opens slash-command completion;
+- Tab completes an eligible slash-command name;
 - Escape cancels the active Run through `asyncio.Task.cancel()`.
 
 The main Screen does not render Textual's persistent Footer. A one-line Composer hint exposes only
@@ -132,7 +133,16 @@ cancellation.
 
 Slash-command completion is capped at six rows. It remains immediately above the Prompt, uses the
 Composer hint for its execution affordance, and disappears as soon as the draft is no longer a
-single slash-command token.
+single slash-command token. The hint advertises Tab completion while candidates are visible.
+
+Tab completion is eligible only for one slash-command token after optional leading whitespace,
+with a collapsed selection and the cursor at the token end. The Host matches against the same
+ordered built-in, Skill, and MCP Prompt command collection rendered as candidates. An exact match
+wins over longer commands; otherwise one match completes uniquely, while multiple matches extend
+only to their longest common prefix. Exact and unique completion append a space. Ambiguity without
+a common extension leaves the draft unchanged and focused. Ineligible or unmatched drafts preserve
+normal Tab focus navigation. Completion uses a TextArea edit so cursor placement and undo history
+behave like ordinary Prompt editing, and it never routes or executes the command by itself.
 
 ## Slash commands
 

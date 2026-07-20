@@ -432,6 +432,42 @@ async def test_follow_up_messages_are_visible_and_run_in_fifo_order(tmp_path: Pa
         ]
 
 
+async def test_tab_keeps_focus_navigation_for_ineligible_completion_drafts(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = ScriptedModel([])
+    factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", TextArea)
+        cases = (
+            ("ordinary", (0, 8), None),
+            ("/unknown", (0, 8), None),
+            ("/model arg", (0, 10), None),
+            ("/mo\nrest", (1, 4), None),
+            ("/model", (0, 3), None),
+            ("/model", (0, 6), (0, 2)),
+        )
+        for draft, cursor, selection_start in cases:
+            prompt.load_text(draft)
+            if selection_start is not None:
+                prompt.move_cursor(selection_start)
+            prompt.move_cursor(cursor, select=selection_start is not None)
+            prompt.focus()
+
+            await pilot.press("tab")
+            await pilot.pause()
+
+            assert prompt.text == draft
+            assert not prompt.has_focus
+            assert app.focused is not None
+        assert model.requests == []
+
+
 async def test_context_command_opens_educational_request_explorer_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -591,8 +627,10 @@ async def test_model_command_updates_empty_branch_and_forks_after_model_output(
         original_id = app.current_session.session_id
         prompt = app.query_one("#prompt", TextArea)
 
-        prompt.load_text("/model model-b")
-        await pilot.press("enter")
+        await pilot.press(*"/mo", "tab")
+        await pilot.pause()
+        assert prompt.text == "/model "
+        await pilot.press(*"model-b", "enter")
         await app.workers.wait_for_complete()
         assert app.current_session is not None
         assert app.current_session.session_id == original_id
@@ -690,14 +728,97 @@ Use this trusted draft instruction.
         prompt.load_text("/")
         await pilot.pause()
         assert "/draft" in str(app.query_one("#command-completion").render())
-        assert "Command" in str(app.query_one("#composer-hint").render())
+        assert "Tab complete" in str(app.query_one("#composer-hint").render())
 
-        prompt.load_text("/draft")
+        prompt.load_text("")
+        await pilot.press("/", "d", "r", "tab")
+        await pilot.pause()
+        assert prompt.text == "/draft "
+        assert prompt.cursor_location == (0, len("/draft "))
+        assert prompt.has_focus
+
         await pilot.press("enter")
         await app.workers.wait_for_complete()
         assert "Use this trusted draft instruction." in prompt.text
         assert app.current_session is not None
         assert app.current_session.revision == revision
+
+
+async def test_tab_completion_preserves_leading_space_and_edit_history_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = ScriptedModel([])
+    factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.current_session is not None
+        revision = app.current_session.revision
+        prompt = app.query_one("#prompt", TextArea)
+        await pilot.press("space", "space", "/", "m", "o")
+        await pilot.pause()
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert prompt.text == "  /model "
+        assert prompt.cursor_location == (0, len("  /model "))
+        assert prompt.has_focus
+        assert app.query_one("#command-completion").display is False
+        assert app.current_session.revision == revision
+        assert model.requests == []
+
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        assert prompt.text == "  /mo"
+        assert prompt.has_focus
+
+
+async def test_tab_extends_ambiguous_dynamic_commands_without_choosing_one(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    for name in ("review-code", "review-docs"):
+        skill_root = workspace / ".phi" / "skills" / name
+        skill_root.mkdir(parents=True)
+        (skill_root / "SKILL.md").write_text(
+            f"""---
+name: {name}
+description: Review one kind of artifact.
+disable-model-invocation: true
+---
+
+Review the requested artifact.
+"""
+        )
+    model = ScriptedModel([])
+    factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
+    app = PhiApp(cwd=workspace, runtime_factory=factory)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", TextArea)
+        await pilot.press(*"/rev", "tab")
+        await pilot.pause()
+
+        assert prompt.text == "/review-"
+        assert prompt.cursor_location == (0, len("/review-"))
+        assert prompt.has_focus
+        completion = app.query_one("#command-completion")
+        assert completion.display is True
+        rendered = str(completion.render())
+        assert "/review-code" in rendered
+        assert "/review-docs" in rendered
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert prompt.text == "/review-"
+        assert prompt.has_focus
+        assert completion.display is True
+        assert model.requests == []
 
 
 async def test_namespaced_mcp_prompt_is_retrieved_as_editable_draft(tmp_path: Path) -> None:
@@ -728,7 +849,18 @@ async def test_namespaced_mcp_prompt_is_retrieved_as_editable_draft(tmp_path: Pa
         await pilot.pause()
         assert "/mcp__prompts__welcome" in str(app.query_one("#command-completion").render())
 
-        prompt.load_text("/mcp")
+        prompt.load_text("")
+        await pilot.press(*"/mcp__p", "tab")
+        await pilot.pause()
+        assert prompt.text == "/mcp__prompts__welcome "
+        assert prompt.has_focus
+
+        prompt.load_text("")
+        await pilot.press(*"/mcp", "tab")
+        await pilot.pause()
+        assert prompt.text == "/mcp "
+        assert prompt.has_focus
+
         await pilot.press("enter")
         await pilot.pause()
         assert "prompts:" in str(app.screen.query_one("#info-content").render())
@@ -736,8 +868,7 @@ async def test_namespaced_mcp_prompt_is_retrieved_as_editable_draft(tmp_path: Pa
         await pilot.press("escape")
         await app.workers.wait_for_complete()
 
-        prompt.load_text("/mcp__prompts__welcome")
-        await pilot.press("enter")
+        await pilot.press(*"/mcp__p", "tab", "enter")
         await pilot.pause()
         await pilot.click("#prompt-argument-0")
         await pilot.press("A", "d", "a")

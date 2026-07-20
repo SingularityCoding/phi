@@ -5,6 +5,7 @@ import shlex
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from datetime import datetime
+from os.path import commonprefix
 from pathlib import Path
 from uuid import uuid4
 
@@ -316,15 +317,56 @@ class PhiApp(App[None]):
             return
         self.query_one("#prompt", PromptInput).resize_for_content()
         completion = self.query_one("#command-completion", Static)
-        text = event.text_area.text.lstrip()
-        if not text.startswith("/") or " " in text or "\n" in text:
+        command_matches = self._slash_command_matches(event.text_area.text)
+        if command_matches is None:
             completion.display = False
             self._update_composer_hint()
             return
-        matches = [name for name in self._command_names() if name.startswith(text)]
+        _, matches = command_matches
         completion.update("\n".join(matches) if matches else "No matching slash commands")
         completion.display = True
         self._update_composer_hint()
+
+    def on_prompt_input_completion_requested(
+        self,
+        message: PromptInput.CompletionRequested,
+    ) -> None:
+        prompt = message.prompt
+        text = prompt.text
+        eligible = prompt.selection.start == prompt.selection.end and prompt.cursor_at_end_of_text
+        command_matches = self._slash_command_matches(text)
+        if not eligible or command_matches is None:
+            self.action_focus_next()
+            return
+        token, matches = command_matches
+        if not matches:
+            self.action_focus_next()
+            return
+        if token in matches:
+            replacement = f"{token} "
+        elif len(matches) == 1:
+            replacement = f"{matches[0]} "
+        else:
+            replacement = commonprefix(matches)
+        if replacement != token:
+            token_start = len(text) - len(token)
+            prompt.replace(
+                replacement,
+                (0, token_start),
+                (0, len(text)),
+                maintain_selection_offset=False,
+            )
+        prompt.focus()
+
+    def _slash_command_matches(self, text: str) -> tuple[str, tuple[str, ...]] | None:
+        token = text.lstrip()
+        if (
+            "\n" in text
+            or not token.startswith("/")
+            or any(character.isspace() for character in token)
+        ):
+            return None
+        return token, tuple(name for name in self._command_names() if name.startswith(token))
 
     def _command_names(self) -> tuple[str, ...]:
         static = set(BUILTIN_COMMANDS)
@@ -991,10 +1033,10 @@ class PhiApp(App[None]):
         hints = self.query("#composer-hint")
         if not hints:
             return
-        prompt_nodes = self.query("#prompt")
-        prompt_text = prompt_nodes.first(PromptInput).text.lstrip() if prompt_nodes else ""
-        if prompt_text.startswith("/") and "\n" not in prompt_text:
-            text = "Command · Enter run · Ctrl+P palette"
+        completion_nodes = self.query("#command-completion")
+        completion_visible = bool(completion_nodes and completion_nodes.first(Static).display)
+        if completion_visible:
+            text = "Command · Tab complete · Enter run · Ctrl+P palette"
         elif self._session_operation_active:
             text = "Updating Session…"
         elif self._run_active or self._draining:
