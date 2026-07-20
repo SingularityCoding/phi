@@ -4,6 +4,7 @@ import asyncio
 import shlex
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -71,6 +72,7 @@ from phi.ui.widgets import (
     QueueDisposition,
     QueueMessageRow,
     ReasoningView,
+    RunBoundaryView,
     RunStatusView,
     ToolCallView,
     TranscriptView,
@@ -78,6 +80,12 @@ from phi.ui.widgets import (
 )
 
 type RuntimeFactory = Callable[[Path], Awaitable[HostRuntime]]
+type Clock = Callable[[], datetime]
+
+
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
+
 
 BUILTIN_COMMANDS = (
     "/new",
@@ -103,7 +111,6 @@ class PhiApp(App[None]):
     #transcript { height: 1fr; padding: 0 1; }
     .user-message { margin: 1 0; padding: 1 2; background: $boost; }
     .assistant-message { margin: 1 0; padding: 0 2; }
-    .reasoning-message { margin: 0 2; padding: 0 1; color: $text-muted; height: auto; }
     .tool-call { margin: 1 2; padding: 1; border: round $accent; height: auto; }
     .tool-call-content { height: auto; }
     .tool-call-progress { height: 1; }
@@ -142,12 +149,14 @@ class PhiApp(App[None]):
         cwd: Path | None = None,
         runtime_factory: RuntimeFactory | None = None,
         max_steps: int = 20,
+        clock: Clock | None = None,
     ) -> None:
         super().__init__()
         self.current_session = initial_session
         self.cwd = (cwd or Path.cwd()).expanduser().resolve()
         self._runtime_factory = runtime_factory
         self._max_steps = max_steps
+        self._clock = clock or _local_now
         self._runtime: HostRuntime | None = None
         self._runtime_closed = False
         self._shutting_down = False
@@ -242,10 +251,10 @@ class PhiApp(App[None]):
 
     async def _mount_assistant_entry(self, entry: AssistantMessageEntry) -> None:
         transcript = self.query_one("#transcript", TranscriptView)
-        if entry.content is not None:
-            await transcript.mount(AssistantMessageView(entry.content))
         if entry.reasoning is not None:
             await transcript.mount(ReasoningView(entry.reasoning))
+        if entry.content is not None:
+            await transcript.mount(AssistantMessageView(entry.content))
         for call in entry.tool_calls:
             view = ToolCallView(call.id, call.name, call.arguments)
             self._tool_views[call.id] = view
@@ -787,15 +796,13 @@ class PhiApp(App[None]):
             reasoning = ReasoningView()
             self._assistant_views[key] = assistant
             self._reasoning_views[key] = reasoning
-            await transcript.mount(assistant)
+            await transcript.mount(reasoning, assistant)
         elif isinstance(event, ModelCallDelta):
             key = (event.run_id, event.step_index)
             if isinstance(event.delta, ContentDelta):
                 self._assistant_views[key].append_content(event.delta.text)
             elif isinstance(event.delta, ReasoningDelta):
                 reasoning = self._reasoning_views[key]
-                if not reasoning.is_mounted:
-                    await transcript.mount(reasoning)
                 reasoning.append_content(event.delta.text)
             elif isinstance(event.delta, ToolCallDelta):
                 return
@@ -806,8 +813,6 @@ class PhiApp(App[None]):
                 self._assistant_views[key].set_content(response.content)
             if response.reasoning is not None:
                 reasoning = self._reasoning_views[key]
-                if not reasoning.is_mounted:
-                    await transcript.mount(reasoning)
                 reasoning.set_content(response.reasoning)
             if response.content is None and self._assistant_views[key].is_empty:
                 await self._assistant_views[key].remove()
@@ -954,17 +959,21 @@ class PhiApp(App[None]):
                 )
 
     def _show_run_status(self, status: RunStatus, error: Exception | None) -> None:
+        transcript = self.query_one("#transcript", TranscriptView)
         if status is RunStatus.COMPLETED:
-            self.query_one("#transcript", TranscriptView).mount(RunStatusView("Run completed"))
+            transcript.mount(RunBoundaryView(self._clock()))
         elif status is RunStatus.FAILED:
             detail = redact_text(str(error)) if error is not None else "unknown failure"
             self._show_error(f"Run failed: {detail}")
         elif status is RunStatus.MAX_STEPS:
-            self.query_one("#transcript", TranscriptView).mount(
-                RunStatusView(f"Run exhausted its Step budget ({self._max_steps})")
+            transcript.mount(
+                RunBoundaryView(
+                    self._clock(),
+                    status_label=f"Step limit ({self._max_steps})",
+                )
             )
         elif status is RunStatus.CANCELLED:
-            self.query_one("#transcript", TranscriptView).mount(RunStatusView("Run cancelled"))
+            transcript.mount(RunBoundaryView(self._clock(), status_label="Cancelled"))
 
     def _show_error(self, message: str) -> None:
         safe = redact_text(message) or "Operational failure"

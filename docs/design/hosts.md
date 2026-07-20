@@ -63,9 +63,13 @@ The presentation widget named `TranscriptView` dispatches Entry and Event types 
 “Transcript” is a UI label here, not a second canonical conversation data model:
 
 - `UserMessageView`;
-- `AssistantMessageView`, with Markdown and collapsed reasoning;
+- `AssistantMessageView`, with Markdown and a lightweight collapsed `ReasoningView` immediately
+  above the content or Tool Call produced by the same Model Step;
 - `ToolCallView`, shown as a spinner during execution and updated in place on completion;
-- `CompactionEntryView` as a structural summary marker.
+- `CompactionEntryView` as a structural summary marker;
+- `RunBoundaryView`, which renders successful completion as a muted horizontal rule centered on the
+  local `HH:MM` completion time. Cancelled and Step-limited Runs include their outcome in the rule;
+  failures remain explicit error cards.
 
 The status bar shows model, Session name/ID, cwd, idle/running state, and a live estimated Context
 capacity signal. The signal uses the shared Context inspection result: `~` marks the Token Estimate,
@@ -79,7 +83,8 @@ fields are omitted as terminal width narrows, and the one-line bar truncates saf
 
 The TUI subscribes to the shared Event bus:
 
-- `ContentDelta` and `ReasoningDelta` append to the current assistant view;
+- `ContentDelta` appends to the current assistant view;
+- `ReasoningDelta` reveals and appends to the collapsed reasoning view immediately above it;
 - partial Tool Call JSON is not rendered;
 - `ToolCallStarted` creates the tool card after assembly;
 - `ToolCallCompleted` updates that card with output or error.

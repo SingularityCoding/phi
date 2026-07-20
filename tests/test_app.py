@@ -5,6 +5,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import SecretStr
@@ -48,6 +49,7 @@ from phi.tools import (
     tool,
 )
 from phi.ui.app import PhiApp
+from phi.ui.widgets import RunBoundaryView
 
 
 @dataclass
@@ -191,7 +193,11 @@ async def test_app_creates_session_and_sends_prompt_through_shared_service(
     workspace.mkdir()
     model = ScriptedModel([ModelResponse(content="Hello **from Phi**")])
     factory = TuiRuntimeFactory(tmp_path, _settings(tmp_path), model)
-    app = PhiApp(cwd=workspace, runtime_factory=factory)
+    app = PhiApp(
+        cwd=workspace,
+        runtime_factory=factory,
+        clock=lambda: datetime(2026, 7, 20, 14, 32).astimezone(),
+    )
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -207,6 +213,10 @@ async def test_app_creates_session_and_sends_prompt_through_shared_service(
         assert "You" in str(transcript.query_one(".user-message").render())
         assert "hello" in str(transcript.query_one(".user-message").render())
         assert "Hello" in transcript.query_one(".assistant-message", Markdown).source
+        boundary = transcript.query_one(RunBoundaryView)
+        assert boundary.status_label is None
+        assert boundary.time_label == "14:32"
+        assert boundary.boundary_title == "14:32"
         assert "Last Run completed" in str(app.query_one("#status-bar").render())
 
         storage = SessionStorage(factory.settings.session_dir)
@@ -1007,9 +1017,9 @@ async def test_escape_cancels_only_active_run_then_drains_ordinary_queue(
             "cancel me",
             "keep me",
         ]
-        statuses = [str(status.render()) for status in app.query(".run-status")]
-        assert any("cancelled" in status for status in statuses)
-        assert any("completed" in status for status in statuses)
+        boundaries = list(app.query(RunBoundaryView))
+        assert any(boundary.status_label == "Cancelled" for boundary in boundaries)
+        assert any(boundary.status_label is None for boundary in boundaries)
 
 
 async def test_escape_before_run_start_persists_cancelled_message_and_drains_queue(
@@ -1049,9 +1059,9 @@ async def test_escape_before_run_start_persists_cancelled_message_and_drains_que
             "cancel before start",
             "still run this",
         ]
-        statuses = [str(status.render()) for status in app.query(".run-status")]
-        assert any("cancelled" in status for status in statuses)
-        assert any("completed" in status for status in statuses)
+        boundaries = list(app.query(RunBoundaryView))
+        assert any(boundary.status_label == "Cancelled" for boundary in boundaries)
+        assert any(boundary.status_label is None for boundary in boundaries)
 
 
 async def test_session_topology_command_cannot_race_active_run(tmp_path: Path) -> None:
@@ -1203,10 +1213,15 @@ async def test_partial_tool_json_stays_hidden_and_reasoning_is_collapsed(
         assert list(app.query(".tool-call")) == []
         reasoning = app.query_one(".reasoning-message", Collapsible)
         assert reasoning.collapsed is True
+        assert reasoning.display is True
         assert "checking the file" in str(
             reasoning.query_one(".reasoning-content", Static).render()
         )
         assert "checking the file" not in app.query_one(".assistant-message", Markdown).source
+        transcript = app.query_one("#transcript")
+        assistant = app.query_one(".assistant-message", Markdown)
+        transcript_children = list(transcript.children)
+        assert transcript_children.index(reasoning) < transcript_children.index(assistant)
 
         model.release.set()
         await app.workers.wait_for_complete()
@@ -1432,9 +1447,9 @@ async def test_max_step_run_does_not_strand_queue(tmp_path: Path) -> None:
         model.release.set()
         await app.workers.wait_for_complete()
 
-        statuses = [str(status.render()) for status in app.query(".run-status")]
-        assert any("exhausted" in status for status in statuses)
-        assert any("completed" in status for status in statuses)
+        boundaries = list(app.query(RunBoundaryView))
+        assert any(boundary.status_label == "Step limit (1)" for boundary in boundaries)
+        assert any(boundary.status_label is None for boundary in boundaries)
         assert list(app.query(".queued-message")) == []
 
 
@@ -1520,6 +1535,10 @@ async def test_reopening_session_renders_durable_tool_result_and_reasoning(
         assert "durable answer" in second_app.query_one(".assistant-message", Markdown).source
         reasoning = second_app.query_one(".reasoning-message", Collapsible)
         assert reasoning.collapsed is True
+        transcript = second_app.query_one("#transcript")
+        assistant = second_app.query_one(".assistant-message", Markdown)
+        transcript_children = list(transcript.children)
+        assert transcript_children.index(reasoning) < transcript_children.index(assistant)
         tool_card = second_app.query_one(".tool-call")
         tool_content = str(tool_card.query_one(".tool-call-content").render())
         assert "complete" in tool_content

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from rich.rule import Rule
+from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
@@ -84,6 +87,45 @@ class AssistantMessageView(Markdown):
 
 
 class ReasoningView(Collapsible):
+    DEFAULT_CSS = """
+    ReasoningView {
+        width: 1fr;
+        height: auto;
+        margin: 1 2 0 2;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: $text-muted;
+    }
+    ReasoningView:focus-within { background-tint: transparent; }
+    ReasoningView CollapsibleTitle {
+        padding: 0 1;
+        color: $text-muted;
+        text-style: none;
+        background: transparent;
+    }
+    ReasoningView CollapsibleTitle:hover {
+        color: $text;
+        background: $panel;
+    }
+    ReasoningView CollapsibleTitle:focus {
+        color: $accent;
+        text-style: bold;
+        background: $panel;
+    }
+    ReasoningView Contents {
+        width: 100%;
+        height: auto;
+        margin: 1 0 0 1;
+        padding: 0 0 0 1;
+        border-left: solid $secondary;
+    }
+    ReasoningView .reasoning-content {
+        height: auto;
+        color: $text-muted;
+    }
+    """
+
     def __init__(self, content: str = "") -> None:
         self._content = content
         self._body = Static(content, classes="reasoning-content", markup=False)
@@ -91,12 +133,16 @@ class ReasoningView(Collapsible):
             self._body,
             title="Reasoning",
             collapsed=True,
+            collapsed_symbol="▸",
+            expanded_symbol="▾",
             classes="reasoning-message",
         )
+        self.display = bool(content)
 
     def set_content(self, content: str) -> None:
         self._content = content
         self._body.update(content)
+        self.display = bool(content)
 
     def append_content(self, content: str) -> None:
         self.set_content(f"{self._content}{content}")
@@ -151,6 +197,42 @@ class RunStatusView(Static):
             text,
             classes=f"run-status{' failed' if failed else ''}",
             markup=False,
+        )
+
+
+class RunBoundaryView(Static):
+    """Low-emphasis visual boundary after one terminal Run outcome."""
+
+    DEFAULT_CSS = """
+    RunBoundaryView {
+        width: 1fr;
+        height: 1;
+        margin: 1 2;
+        color: $text-muted;
+        text-style: dim;
+    }
+    RunBoundaryView.warning {
+        color: $warning;
+        text-style: none;
+    }
+    """
+
+    def __init__(self, finished_at: datetime, *, status_label: str | None = None) -> None:
+        local_finished_at = finished_at.astimezone()
+        self.time_label = local_finished_at.strftime("%H:%M")
+        self.status_label = status_label
+        self.boundary_title = (
+            self.time_label if status_label is None else f"{status_label} · {self.time_label}"
+        )
+        classes = "run-boundary completed" if status_label is None else "run-boundary warning"
+        super().__init__("", classes=classes, markup=False)
+
+    def render(self) -> Rule:
+        style = self.rich_style
+        return Rule(
+            Text(self.boundary_title, style=style),
+            characters="─",
+            style=style,
         )
 
 
