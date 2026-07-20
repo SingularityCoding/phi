@@ -10,6 +10,8 @@ architecture or endorses every implementation choice. The current Phi design is 
 later incorporates source code rather than an idea or interface comparison, that code must retain
 the upstream project's license and file-level attribution as required.
 
+<!-- --8<-- [start:course-references] -->
+
 ## Agent Harnesses and coding agents
 
 ### Gemma
@@ -159,3 +161,5 @@ does not embed the LiteLLM Python SDK.
 
 These references informed the modal approval and Context-inspector interaction boundaries. Textual
 remains a Host dependency and does not own the Harness loop or durable Session state.
+
+<!-- --8<-- [end:course-references] -->

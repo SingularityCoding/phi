@@ -9,22 +9,174 @@
 
 ## Part A · Phi 全景演示
 
-这是个"预告片"，不是教程——今天不会解释每一步背后的机制，只是让大家先看到完整的样子，后面每一章
-再回头讲清楚"刚才看到的那个功能，具体是怎么做到的"。建议演示顺序，每一步都能直接接到后面某一章:
+先不解释内部实现，我们直接完整跑一次 Phi。
 
-- 用 `uv run phi` 启动 TUI，交给它一个真实任务，看着它自己读文件、跑命令、给出结果——这就是
-  01-03 章要现场手写出来的东西的完整版。
-- 中途让它碰一次需要确认的操作（比如改文件），看一眼审批提示长什么样——对应第 06 章 Safety &amp;
-  Approval。
-- 关掉、重新打开，恢复刚才那个会话；再从中间某一步分叉出一个新会话——对应第 05 章 Session。
-- 如果连了 MCP server，跑一次调用外部工具的任务——对应第 07 章 MCP。
-- 展示一个 slash command 或者 Skill 被自动加载——对应第 08 章 Hooks &amp; Skills。
-- 让它把一部分任务委派给一个子 Agent——对应第 09 章 Multi-agent。
-- 打开一次运行留下的 Trace（JSONL）——对应第 10 章 Events &amp; Tracing。
-- 换成无头的 `phi run "..."` 跑同一类任务，对比 TUI——对应第 11 章 Hosts。
+看演示的时候，先留意三个问题：
 
-不用每样都深挖，走马观花就行——重点是让大家对"这门课最后能理解的完整系统"有个直观印象，而不是活
-在"我只写了一百多行代码"的错觉里。
+1. 哪些动作是 Model 提议的？
+2. 哪些动作必须由 Harness 才能真正执行？
+3. 一次 Run 结束以后，哪些信息会被保留下来？
+
+后面的章节会逐一回答这些问题。
+
+### 1 · 启动 Phi
+
+在一个准备好的演示目录中启动 TUI：
+
+```bash
+uv run phi
+```
+
+现在看到的是 Phi 的交互式 Host。我们可以在这里提交任务，观察 Model 的输出、Tool Call、Tool Result 和最终回复。
+
+先确认当前使用默认的审批模式：
+
+```text
+/permissions default
+```
+
+### 2 · 交给它一个真实任务
+
+演示目录中已经有一份 `brief.md`。现在提交任务：
+
+```text
+读取 brief.md，把其中的信息整理成一份带标题和三个要点的摘要，
+写入 result.md，然后运行一个只读命令确认文件已经生成。
+最后告诉我你读取了什么、修改了什么、如何验证。
+```
+
+先观察它如何向前推进：
+
+```text
+Model 请求读取文件
+    ↓
+Harness 执行 Tool
+    ↓
+Tool Result 返回给 Model
+    ↓
+Model 根据结果决定下一步
+```
+
+一次任务不一定只调用一次 Model。只要 Model 还在请求 Tool，Harness 就会把结果放回 Context，再开始下一步。这段反复发生的控制流程就是 Agent Loop。
+
+第 01–03 章会从零写出这里看到的 Model 边界、Tool 边界和 Agent Loop。
+
+### 3 · 谁拥有执行权
+
+当 Phi 准备写入 `result.md` 时，Run 会停在审批界面。
+
+先看清楚审批界面中的信息：
+
+- 它准备调用哪个 Tool；
+- 它准备传入什么参数；
+- 这个操作属于哪一类权限；
+- 我们可以只允许这一次、在当前 Session 中持续允许，或者拒绝。
+
+这里要区分两件事：
+
+> Model 提议写文件，但 Model 自己不能写文件。
+>
+> Harness 验证 Tool Call、请求授权，并决定是否执行。
+
+选择“仅本次允许”，让 Run 继续完成。第 06 章会再回来拆解这条安全边界。
+
+### 4 · 最终回复不等于真实结果
+
+Run 完成以后，Phi 会说明它读取了什么、修改了什么，以及如何验证。
+
+但 Agent 说“文件已经生成”，并不能证明文件真的存在。打开 `result.md`，再检查一次 Environment 中的实际状态。
+
+这里的 Environment 才是 ground truth。Agent 的最终回复只是它对结果的描述。
+
+### 5 · Model 实际看到了什么
+
+接着输入：
+
+```text
+/context
+```
+
+这里可以看到本次请求的 Overview、Contents 和 Raw request。
+
+注意三种东西并不相同：
+
+- TUI 中展示的是 Conversation；
+- Model 每一步收到的是由 Harness 构建的有限 Context；
+- Session 保存的是可恢复、可继续使用的持久化历史。
+
+它们现在看起来很接近，但随着 Conversation 变长，三者之间的区别会越来越重要。第 04 章会专门讨论 Context 是怎样构建出来的。
+
+退出 Context 页面，再输入：
+
+```text
+/session
+```
+
+记下当前的 Session ID。虽然刚才的 Run 已经结束，这段 Conversation 仍然属于一个可以继续使用的 Session。
+
+### 6 · 恢复和分叉
+
+退出 TUI：
+
+```text
+/quit
+```
+
+然后重新打开刚才的 Session：
+
+```bash
+uv run phi session resume <session-id>
+```
+
+之前的用户消息、Model 回复、Tool Call 和 Tool Result 都重新出现了。这不是重新执行刚才的任务，而是从持久化数据中恢复 Conversation。
+
+现在输入：
+
+```text
+/fork
+```
+
+选择第一次用户消息作为分叉点，然后给出一个不同的后续要求：
+
+```text
+改用表格整理 brief.md，并且不要写文件，只在回复中展示结果。
+```
+
+再输入一次：
+
+```text
+/session
+```
+
+此时我们已经位于一个新的 Session。它保存了自己的 Session ID，同时记录 Parent Session 和 Fork point。
+
+恢复是在原 Session 上继续；Fork 则从一段已有历史中建立新的 Session。第 05 章会具体查看它们怎样存储。
+
+### 刚才完整发生了什么
+
+回头看刚才的任务：
+
+```text
+Host 接收任务
+    ↓
+Harness 构建 Context
+    ↓
+Model 返回回复或 Tool Call
+    ↓
+Harness 验证、授权并执行 Tool
+    ↓
+Tool Result 回到下一步 Context
+    ↓
+Harness 决定继续或停止
+    ↓
+Session 保存 Conversation
+```
+
+这就是我们接下来要拆开的完整系统：
+
+> **Agent = Model + Harness**
+
+现在先暂时放下 Context、Session 和 Safety，从最小的 Model 边界开始。
 
 ## Part B · Python 并发回顾
 

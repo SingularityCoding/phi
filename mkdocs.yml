@@ -57,7 +57,10 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - docs
+      check_paths: true
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
@@ -98,6 +101,7 @@ nav:
       - "12 · 工业界 Agent 还差什么": chapters/12-industry-frontier.md
   - Appendix:
       - 环境准备: appendix/setup.md
+      - 参考资料与设计来源: appendix/references.md
 
 extra_css:
   - stylesheets/extra.css

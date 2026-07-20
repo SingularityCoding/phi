@@ -96,7 +96,24 @@ asyncio.run(main())
 这些多出来的部分,没有一处是"炫技",都是某个真实场景逼出来的。今天没写,不是因为不重要,是因为一节
 课的时间,先把"边界该长什么样"这件事搞清楚,比一次性搞定所有供应商怪癖更值。
 
-## 思考题
+## Wire format 不只有一种
 
-`finish_reason` 该建模成一个封闭的 Enum,还是像我们今天这样保留成开放字符串?如果某天 Proxy 后面换
-了个供应商,吐出一个你从没见过的 `finish_reason` 值,这两种设计分别会发生什么?
+我们今天实现的是 **OpenAI Chat Completions-compatible** 格式：请求发到
+`/chat/completions`，输入是一组 `messages`，返回内容位于 `choices[].message`，Tool Call 也嵌在
+assistant message 中。Phi 当前使用的就是这套格式。
+
+这里的 “OpenAI-compatible” 描述的是通信协议，不代表背后运行的一定是 OpenAI 的模型。Phi 面向的是
+LiteLLM Proxy；Proxy 可以在后面路由不同供应商的模型，再把它们统一成 Chat Completions 格式返回。
+
+实际还会遇到另外两种常见格式：
+
+- **Anthropic Messages API**：请求发到 `/v1/messages`，回复由一组 content blocks 组成，文本、
+  `tool_use` 和 `tool_result` 都是不同类型的 block，system prompt 也有独立的顶层字段。
+- **OpenAI Responses API**：请求发到 `/v1/responses`，使用类型化的 Items 表示 message、reasoning、
+  function call 和 function call output，Streaming 返回的也是类型化 Event。
+
+三种格式的字段和 Streaming 事件都不一样，但它们解决的是同一个边界问题：把外部协议转换成 Agent
+内部信任的 `ModelResponse`。
+
+如果 Phi 以后直接支持 Anthropic Messages 或 OpenAI Responses，应该为它们增加新的 Model adapter，
+把结果归一化成同一套内部类型，而不是让 Harness 到处判断当前使用的是哪家协议。
