@@ -39,6 +39,22 @@ from phi.tools import BYPASS_MODE, RuleBasedApprovalPolicy, ToolDispatcher, Tool
 runner = CliRunner()
 
 
+def _set_interactive_terminal(
+    monkeypatch,
+    *,
+    columns: str = "80",
+    term: str = "xterm-256color",
+    no_color: bool = False,
+) -> None:
+    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
+    monkeypatch.setenv("COLUMNS", columns)
+    monkeypatch.setenv("TERM", term)
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    else:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
+
 def _settings(root: Path, *, default_model: str = "model-a") -> Settings:
     return Settings(
         api_key=SecretStr("test-key"),
@@ -196,6 +212,35 @@ def test_session_list_uses_id_ties_and_shows_fork_and_subagent_origins(
     assert all(origin in result.stdout for origin in ("new", "fork", "subagent"))
 
 
+def test_session_list_preserves_complete_values_at_narrow_terminal_width(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    storage = SessionStorage(settings.session_dir)
+    handle = asyncio.run(_completed_session(storage))
+    assert handle.leaf_id is not None
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    _set_interactive_terminal(monkeypatch, columns="20", term="dumb")
+
+    result = runner.invoke(app, ["session", "list"], color=True)
+
+    assert result.exit_code == 0
+    assert "\x1b[" not in result.stdout
+    compact = "".join(result.stdout.split())
+    assert all(
+        value in compact
+        for value in (
+            handle.session_id,
+            handle.leaf_id,
+            "Original",
+            "model-a",
+            handle.metadata.updated_at.isoformat(),
+            "new",
+        )
+    )
+
+
 def test_session_list_fails_closed_on_corrupt_data(monkeypatch, tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     storage = SessionStorage(settings.session_dir)
@@ -257,9 +302,7 @@ def test_operational_error_styles_markup_shaped_text_without_interpreting_it(
     settings = _settings(tmp_path)
     missing_id = "[bold red]missing[/bold red]"
     monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
-    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
-    monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.delenv("NO_COLOR", raising=False)
+    _set_interactive_terminal(monkeypatch)
 
     result = runner.invoke(
         app,
@@ -270,6 +313,23 @@ def test_operational_error_styles_markup_shaped_text_without_interpreting_it(
     assert result.exit_code == 1
     assert missing_id in result.stderr
     assert "\x1b[" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_operational_error_escapes_injected_ansi_in_a_dumb_terminal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    missing_id = "missing-\x1b[31m-red"
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    _set_interactive_terminal(monkeypatch, term="dumb")
+
+    result = runner.invoke(app, ["session", "resume", missing_id], color=True)
+
+    assert result.exit_code == 1
+    assert "\x1b[" not in result.stderr
+    assert r"\x1b[31m" in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -303,10 +363,7 @@ def test_session_fork_renders_clear_lineage_in_an_interactive_terminal(
     storage = SessionStorage(settings.session_dir)
     source = asyncio.run(_completed_session(storage))
     monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
-    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
-    monkeypatch.setenv("COLUMNS", "80")
-    monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.delenv("NO_COLOR", raising=False)
+    _set_interactive_terminal(monkeypatch)
 
     result = runner.invoke(
         app,
@@ -332,10 +389,7 @@ def test_session_fork_honors_no_color_and_wraps_safely_at_narrow_width(
     storage = SessionStorage(settings.session_dir)
     source = asyncio.run(_completed_session(storage))
     monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
-    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
-    monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.setenv("COLUMNS", "40")
-    monkeypatch.setenv("NO_COLOR", "1")
+    _set_interactive_terminal(monkeypatch, columns="40", no_color=True)
 
     result = runner.invoke(
         app,
@@ -888,9 +942,7 @@ def test_mcp_mutation_confirmations_are_colored_only_in_interactive_terminals(
     tmp_path: Path,
 ) -> None:
     _mcp_paths(monkeypatch, tmp_path)
-    monkeypatch.setattr("phi.cli.rendering._stream_is_terminal", lambda stream: True)
-    monkeypatch.setenv("TERM", "xterm-256color")
-    monkeypatch.delenv("NO_COLOR", raising=False)
+    _set_interactive_terminal(monkeypatch)
 
     added = runner.invoke(
         app,
@@ -973,6 +1025,49 @@ def test_mcp_list_shows_effective_sources_and_env_names_without_values(
     assert "Scope: global" in global_only.stdout
     assert all(value in global_only.stdout for value in ("shared", "global-shared", "old"))
     assert "global-only" in global_only.stdout
+
+
+def test_mcp_list_redacts_credentials_and_preserves_values_at_narrow_width(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _, project_path = _mcp_paths(monkeypatch, tmp_path)
+    secret = "super-secret-value"
+    asyncio.run(
+        save_mcp_config(
+            project_path,
+            McpConfig(
+                mcpServers={
+                    "narrow-server": McpServerConfig(
+                        command="[bold]literal-\x1b[31m-command[/bold]",
+                        args=(f"api_key={secret}", "long-argument-TAIL-MARKER"),
+                        env={"SERVICE_CREDENTIAL": secret},
+                        enabled=False,
+                    )
+                }
+            ),
+        )
+    )
+    _set_interactive_terminal(monkeypatch, columns="20", term="dumb")
+
+    result = runner.invoke(app, ["mcp", "list"], color=True)
+
+    assert result.exit_code == 0
+    assert "\x1b[" not in result.stdout
+    assert secret not in result.stdout
+    compact = "".join(result.stdout.split())
+    assert all(
+        value in compact
+        for value in (
+            "narrow-server",
+            "project",
+            "disabled",
+            r"[bold]literal-\x1b[31m-command[/bold]",
+            "api_key=[REDACTED]",
+            "long-argument-TAIL-MARKER",
+            "SERVICE_CREDENTIAL",
+        )
+    )
 
 
 def test_mcp_remove_targets_one_source_and_reveals_global_override(

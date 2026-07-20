@@ -248,8 +248,8 @@ def _is_credential_key(key: str) -> bool:
     )
 
 
-def redact_text(value: str) -> str:
-    """Redact credential-shaped values and bound text for safe user-visible output."""
+def redact_text(value: str, *, max_length: int | None = _MAX_TEXT_LENGTH) -> str:
+    """Redact credential-shaped values and optionally bound safe user-visible output."""
 
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
     redacted = _QUOTED_CREDENTIAL_PATTERN.sub(
@@ -258,6 +258,6 @@ def redact_text(value: str) -> str:
     )
     redacted = _UNQUOTED_CREDENTIAL_PATTERN.sub(r"\1[REDACTED]", redacted)
     redacted = _KEY_PATTERN.sub("[REDACTED]", redacted)
-    if len(redacted) > _MAX_TEXT_LENGTH:
-        return redacted[:_MAX_TEXT_LENGTH] + "…"
+    if max_length is not None and len(redacted) > max_length:
+        return redacted[:max_length] + "…"
     return redacted
