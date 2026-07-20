@@ -130,15 +130,19 @@ uv run phi context [--session <session-id>] [--json]
 uv run phi mcp add [--global] <name> -- <command> [args...]
 uv run phi mcp list [--global]
 uv run phi mcp remove [--global] <name>
-uv run phi doctor
+uv run phi doctor [--verbose] [--deep] [--json]
 ```
 
 Session and Context reads fail closed on corrupt data and report crash-recovery diagnostics on
 stderr. `phi context --json` emits one versioned document containing the complete model-visible
 request, character counts, Token Estimate diagnostics, and known input limits; it does not invoke
 the Model. MCP configuration commands atomically edit only the selected source and never start a
-server. `phi doctor` checks trusted Model settings, Proxy model discovery, and default-Model
-availability without creating a Session, starting MCP, or making a Model response request.
+server. `phi doctor` reports configuration, workspace resources, and Model gateway readiness in
+sections. The standard check does not create a Session, start MCP servers, or request a Model
+response. `--deep` additionally starts and closes enabled MCP servers and sends one minimal
+streaming request to the default Model; it still does not create a Session or execute Tools.
+`--verbose` includes successful-check details and timings, while `--json` emits a versioned,
+redacted report. Warnings keep exit status 0; failed required checks exit 1.
 Human-readable commands use width-aware tables, panels, semantic status colors, and explicit text
 labels. Phi honors `NO_COLOR`, dumb terminals, and redirected streams without adding ANSI escapes;
 machine JSON/JSONL, completed Run output, and the `session_id=<id>` stderr record remain undecorated.

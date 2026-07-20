@@ -44,6 +44,9 @@ uv run phi --help
 uv run phi doctor
 ```
 
+Use `phi doctor --verbose` for successful-check details, `--deep` for live MCP and Model probes,
+or `--json` for a versioned machine-readable report.
+
 The CLI also exposes `session list/resume/fork`, complete `context` inspection, and project/global
 `mcp add/list/remove` operations. Use each command's `--help` output for its current arguments and
 options.

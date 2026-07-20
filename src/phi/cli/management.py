@@ -3,23 +3,18 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-import httpx
-
-from phi.bootstrap import HostConfigurationError, HostRuntime, model_config_from_settings
+from phi.bootstrap import HostRuntime
 from phi.cli.model_selection import resolve_available_model
-from phi.model import ModelConfig, ModelInfo
 from phi.sessions import (
     ContextInspection,
     SessionHandle,
     SessionStorage,
     inspect_context,
     list_session_handles,
-    redact_text,
     resume_session,
 )
-from phi.settings import Settings
 
 
 class ContextSelectionError(ValueError):
@@ -27,8 +22,6 @@ class ContextSelectionError(ValueError):
 
 
 type RuntimeFactory = Callable[[Path], Awaitable[HostRuntime]]
-type ModelDiscovery = Callable[[ModelConfig], Awaitable[list[ModelInfo]]]
-type SettingsFactory = Callable[[], Settings]
 
 
 @dataclass(frozen=True)
@@ -78,22 +71,6 @@ class ContextCommandOutcome:
             },
             "diagnostics": list(self.diagnostics),
         }
-
-
-@dataclass(frozen=True)
-class DoctorCheck:
-    name: str
-    status: Literal["PASS", "FAIL", "SKIP"]
-    detail: str | None = None
-
-
-@dataclass(frozen=True)
-class DoctorReport:
-    checks: tuple[DoctorCheck, ...]
-
-    @property
-    def healthy(self) -> bool:
-        return all(check.status == "PASS" for check in self.checks)
 
 
 async def select_context_session(
@@ -153,77 +130,3 @@ async def execute_context_inspection(
         return ContextCommandOutcome(handle, model_id, inspection, diagnostics)
     finally:
         await runtime.close()
-
-
-async def run_doctor(
-    *,
-    settings_factory: SettingsFactory,
-    model_discovery: ModelDiscovery,
-) -> DoctorReport:
-    """Run bounded Model-boundary diagnostics in prerequisite order."""
-
-    try:
-        settings = settings_factory()
-        config = model_config_from_settings(settings)
-        _validate_doctor_base_url(settings.base_url)
-    except Exception as error:
-        detail = redact_text(str(error)) or type(error).__name__
-        return DoctorReport(
-            (
-                DoctorCheck("settings", "FAIL", detail),
-                DoctorCheck("model-discovery", "SKIP"),
-                DoctorCheck("default-model", "SKIP"),
-            )
-        )
-
-    try:
-        models = await model_discovery(config)
-    except Exception as error:
-        detail = _redact_doctor_error(error, settings)
-        return DoctorReport(
-            (
-                DoctorCheck("settings", "PASS"),
-                DoctorCheck("model-discovery", "FAIL", detail),
-                DoctorCheck("default-model", "SKIP"),
-            )
-        )
-
-    default_model = settings.default_model.strip()
-    if not default_model:
-        default_check = DoctorCheck(
-            "default-model",
-            "FAIL",
-            "PHI_DEFAULT_MODEL is required",
-        )
-    elif default_model not in {model.id for model in models}:
-        default_check = DoctorCheck(
-            "default-model",
-            "FAIL",
-            redact_text(f"Model {default_model!r} is not available"),
-        )
-    else:
-        default_check = DoctorCheck("default-model", "PASS")
-    return DoctorReport(
-        (
-            DoctorCheck("settings", "PASS"),
-            DoctorCheck("model-discovery", "PASS"),
-            default_check,
-        )
-    )
-
-
-def _redact_doctor_error(error: Exception, settings: Settings) -> str:
-    detail = str(error)
-    api_key = settings.api_key.get_secret_value()
-    if api_key:
-        detail = detail.replace(api_key, "[REDACTED]")
-    return redact_text(detail) or type(error).__name__
-
-
-def _validate_doctor_base_url(base_url: str) -> None:
-    try:
-        parsed = httpx.URL(base_url)
-    except httpx.InvalidURL:
-        raise HostConfigurationError("PHI_BASE_URL must be an absolute HTTP(S) URL") from None
-    if parsed.scheme not in {"http", "https"} or not parsed.host:
-        raise HostConfigurationError("PHI_BASE_URL must be an absolute HTTP(S) URL")

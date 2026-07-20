@@ -13,11 +13,11 @@ from phi.bootstrap import build_headless_runtime, model_config_from_settings
 from phi.cli.headless import execute_headless_run
 from phi.cli.management import (
     execute_context_inspection,
-    run_doctor,
     select_context_session,
 )
 from phi.cli.model_selection import require_available_model, require_explicit_model_id
 from phi.cli.rendering import (
+    doctor_progress,
     render_cancelled,
     render_confirmation,
     render_context,
@@ -30,6 +30,12 @@ from phi.cli.rendering import (
     render_session_fork,
     render_sessions,
     render_warning,
+)
+from phi.doctor import (
+    DoctorDependencies,
+    probe_default_model,
+    probe_mcp_servers,
+    run_doctor,
 )
 from phi.harness import RunEvent, RunStatus
 from phi.mcp import add_mcp_server, list_configured_mcp_servers, remove_mcp_server
@@ -56,6 +62,8 @@ _settings_factory: Callable[[], Settings] = Settings
 _model_discovery: Callable[[ModelConfig], Coroutine[Any, Any, list[ModelInfo]]] = (
     list_available_models
 )
+_model_probe = probe_default_model
+_mcp_probe = probe_mcp_servers
 
 
 def _global_mcp_path() -> Path:
@@ -300,16 +308,50 @@ def mcp_remove_command(
 
 
 @app.command("doctor")
-def doctor_command() -> None:
-    """Validate Model settings, Proxy discovery, and the configured default Model."""
+def doctor_command(
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Show successful-check details and timings."),
+    ] = False,
+    deep: Annotated[
+        bool,
+        typer.Option(
+            "--deep",
+            help="Start enabled MCP servers and send one streaming Model request.",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit one versioned machine-readable report."),
+    ] = False,
+) -> None:
+    """Check whether this workspace can start a Run with the default Model."""
 
-    report = _run_async(
-        run_doctor(
-            settings_factory=_settings_factory,
-            model_discovery=_model_discovery,
-        )
+    dependencies = DoctorDependencies(
+        settings_factory=_settings_factory,
+        model_discovery=_model_discovery,
+        model_probe=_model_probe,
+        mcp_probe=_mcp_probe,
     )
-    render_doctor(report.checks)
+    with doctor_progress(enabled=not json_output):
+        report = _run_async(
+            run_doctor(
+                Path.cwd(),
+                deep=deep,
+                dependencies=dependencies,
+            )
+        )
+    if json_output:
+        typer.echo(
+            json.dumps(
+                report.to_document(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    else:
+        render_doctor(report, verbose=verbose)
     if not report.healthy:
         raise typer.Exit(1)
 

@@ -26,7 +26,7 @@ phi context [--session <id>] [--json]
 phi mcp add [--global] <name> -- <command> [args...]
 phi mcp list [--global]
 phi mcp remove <name> [--global]
-phi doctor
+phi doctor [--verbose] [--deep] [--json]
 ```
 
 - Bare `phi` launches the TUI with a new Session.
@@ -37,8 +37,11 @@ phi doctor
 - `session resume` launches the TUI on the chosen Session.
 - CLI `session fork` creates a branch and exits; interactive fork continues inside the TUI.
 - `context` calls the same Context builder used before a model request and performs no model call.
-- `doctor` validates trusted Model Settings and credentials, Proxy model discovery, and configured
-  default-Model availability in dependency order without building an Agent runtime.
+- `doctor` reports configuration, workspace-resource, and Model-gateway readiness in dependency
+  order. Standard mode does not create a Session, start MCP servers, or request a Model response.
+  `--deep` starts and closes enabled MCP servers and sends one minimal streaming request without
+  executing Tools. `--json` is versioned and redacted; warnings exit 0 and failed required checks
+  exit 1.
 
 Exit codes for `phi run`:
 

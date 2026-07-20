@@ -6,7 +6,8 @@ import re
 import shlex
 import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import TextIO
 
 from rich import box
@@ -16,7 +17,8 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from phi.cli.management import ContextCommandOutcome, DoctorCheck
+from phi.cli.management import ContextCommandOutcome
+from phi.doctor import DoctorCheck, DoctorReport, DoctorSection, DoctorStatus
 from phi.mcp import ConfiguredMcpServer
 from phi.sessions import SessionHandle, redact_text
 
@@ -271,34 +273,182 @@ def render_mcp_servers(
     console.print(table)
 
 
-def render_doctor(checks: Sequence[DoctorCheck]) -> None:
+_DOCTOR_SECTION_TITLES = {
+    DoctorSection.CONFIGURATION: "Configuration",
+    DoctorSection.WORKSPACE: "Workspace",
+    DoctorSection.MODEL_GATEWAY: "Model gateway",
+    DoctorSection.DEEP_CHECKS: "Deep checks",
+}
+_DOCTOR_STATUS_STYLES = {
+    DoctorStatus.PASS: "bold green",
+    DoctorStatus.WARN: "bold yellow",
+    DoctorStatus.FAIL: "bold red",
+    DoctorStatus.SKIP: "dim yellow",
+}
+
+
+@contextmanager
+def doctor_progress(*, enabled: bool) -> Iterator[None]:
     console = _console()
-    table = Table(
-        title="Doctor",
-        title_style="bold cyan",
-        header_style="bold cyan",
-        box=box.ROUNDED,
-        expand=True,
+    if not enabled or not _stream_is_terminal(sys.stdout):
+        yield
+        return
+    with console.status("Running Phi diagnostics…", spinner="dots"):
+        yield
+
+
+def render_doctor(report: DoctorReport, *, verbose: bool) -> None:
+    console = _console()
+    console.print(Text("Phi doctor", style="bold cyan"))
+    mode = (
+        "Deep checks · starts enabled MCP servers · sends one streaming Model request"
+        if report.mode == "deep"
+        else "Standard checks · no Model response · no MCP server started"
     )
-    table.add_column("Status")
-    table.add_column("Check", ratio=1, overflow="fold")
-    status_styles = {"PASS": "bold green", "FAIL": "bold red", "SKIP": "bold yellow"}
-    for check in checks:
-        table.add_row(
-            Text(check.status, style=status_styles[check.status]),
-            _literal_text(check.name),
+    console.print(Text(mode, style="dim"))
+
+    if verbose:
+        console.print()
+        facts = Table.grid(padding=(0, 2))
+        facts.add_column(style="bold cyan", no_wrap=True)
+        facts.add_column(overflow="fold")
+        for name, value in report.environment:
+            facts.add_row(_doctor_fact_label(name), _literal_text(value))
+        console.print(facts)
+
+    for section in DoctorSection:
+        checks = tuple(check for check in report.checks if check.section is section)
+        if not checks:
+            continue
+        console.print()
+        console.print(Text(_DOCTOR_SECTION_TITLES[section], style="bold cyan"))
+        if console.width < 80:
+            _render_narrow_doctor_checks(console, checks, verbose=verbose)
+        else:
+            _render_wide_doctor_checks(console, checks, verbose=verbose)
+
+    console.print()
+    summary_style = "bold red" if not report.healthy else "bold green"
+    if report.counts[DoctorStatus.WARN] and report.healthy:
+        summary_style = "bold yellow"
+    console.print(
+        Text(
+            f"{_doctor_summary(report)} · {report.duration_ms / 1000:.2f}s",
+            style=summary_style,
         )
+    )
+    if not report.healthy:
+        conclusion = "Phi is not ready to start a Run. Fix the failures and rerun doctor."
+    elif report.counts[DoctorStatus.WARN]:
+        conclusion = "Phi can start a Run. Optional configuration needs attention."
+    else:
+        conclusion = "Phi is ready to start a Run."
+    console.print(_literal_text(conclusion))
+
+
+def _render_wide_doctor_checks(
+    console: Console,
+    checks: Sequence[DoctorCheck],
+    *,
+    verbose: bool,
+) -> None:
+    table = Table.grid(expand=True, padding=(0, 2))
+    table.add_column(width=6, no_wrap=True)
+    table.add_column(width=27, style="bold", overflow="fold")
+    table.add_column(ratio=1, overflow="fold")
+    for check in checks:
+        summary = check.summary
+        if verbose and check.duration_ms is not None:
+            summary = f"{summary} · {check.duration_ms}ms"
+        table.add_row(
+            Text(check.status.value, style=_DOCTOR_STATUS_STYLES[check.status]),
+            _literal_text(check.title),
+            _literal_text(summary),
+        )
+        if check.status is not DoctorStatus.PASS or verbose:
+            for detail in check.details:
+                table.add_row("", "", _literal_text(detail, style=_doctor_detail_style(check)))
+        if check.remediation is not None:
+            table.add_row(
+                "",
+                "",
+                Text.assemble(
+                    ("Fix: ", _DOCTOR_STATUS_STYLES[check.status]),
+                    _literal_text(check.remediation),
+                ),
+            )
     console.print(table)
 
-    error_console = _console(stderr=True)
-    for check in checks:
-        if check.detail is not None:
-            error_console.print(
-                Text.assemble(
-                    ("error: ", "bold red"),
-                    _literal_text(f"{check.name}: {check.detail}"),
-                )
+
+def _render_narrow_doctor_checks(
+    console: Console,
+    checks: Sequence[DoctorCheck],
+    *,
+    verbose: bool,
+) -> None:
+    for index, check in enumerate(checks):
+        if index:
+            console.print()
+        console.print(
+            Text.assemble(
+                (check.status.value, _DOCTOR_STATUS_STYLES[check.status]),
+                "  ",
+                _literal_text(check.title, style="bold"),
             )
+        )
+        summary = check.summary
+        if verbose and check.duration_ms is not None:
+            summary = f"{summary} · {check.duration_ms}ms"
+        console.print(Text.assemble("  ", _literal_text(summary)), overflow="fold")
+        if check.status is not DoctorStatus.PASS or verbose:
+            for detail in check.details:
+                console.print(
+                    Text.assemble("  ", _literal_text(detail, style=_doctor_detail_style(check))),
+                    overflow="fold",
+                )
+        if check.remediation is not None:
+            console.print(
+                Text.assemble(
+                    ("  Fix: ", _DOCTOR_STATUS_STYLES[check.status]),
+                    _literal_text(check.remediation),
+                ),
+                overflow="fold",
+            )
+
+
+def _doctor_detail_style(check: DoctorCheck) -> str:
+    if check.status is DoctorStatus.FAIL:
+        return "red"
+    if check.status in {DoctorStatus.WARN, DoctorStatus.SKIP}:
+        return "yellow"
+    return "dim"
+
+
+def _doctor_summary(report: DoctorReport) -> str:
+    labels = {
+        DoctorStatus.FAIL: ("failure", "failures"),
+        DoctorStatus.WARN: ("warning", "warnings"),
+        DoctorStatus.SKIP: ("skipped", "skipped"),
+        DoctorStatus.PASS: ("passed", "passed"),
+    }
+    parts: list[str] = []
+    for status in (DoctorStatus.FAIL, DoctorStatus.WARN, DoctorStatus.SKIP, DoctorStatus.PASS):
+        count = report.counts[status]
+        if count:
+            singular, plural = labels[status]
+            parts.append(f"{count} {singular if count == 1 else plural}")
+    return " · ".join(parts)
+
+
+def _doctor_fact_label(name: str) -> str:
+    labels = {
+        "phi_version": "Phi",
+        "python_version": "Python",
+        "platform": "Platform",
+        "executable": "Executable",
+        "cwd": "Workspace",
+    }
+    return labels.get(name, name.replace("_", " ").title())
 
 
 def _known_value(value: int | None) -> str:

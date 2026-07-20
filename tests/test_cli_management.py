@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from phi.bootstrap import HostRuntime, build_runtime_resources
 from phi.cli import app
+from phi.doctor import McpProbeResult
 from phi.harness import RunStatus
 from phi.instructions import PHI_BASE_INSTRUCTIONS
 from phi.mcp import McpConfig, McpServerConfig, load_mcp_config, save_mcp_config
@@ -62,6 +63,11 @@ def _settings(root: Path, *, default_model: str = "model-a") -> Settings:
         default_model=default_model,
         session_dir=root / "sessions",
     )
+
+
+def _isolate_doctor_environment(monkeypatch, root: Path) -> None:
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("HOME", str(root))
 
 
 async def _completed_session(storage: SessionStorage):
@@ -1162,35 +1168,50 @@ def test_doctor_reports_all_passes_without_runtime_side_effects(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     settings = _settings(tmp_path)
     discovered_configs: list[object] = []
 
     async def discover_models(config):
         discovered_configs.append(config)
-        return [ModelInfo("model-a"), ModelInfo("model-b")]
+        return [
+            ModelInfo("model-a", max_input_tokens=128_000, max_output_tokens=16_000),
+            ModelInfo("model-b"),
+        ]
 
     async def unexpected_runtime(cwd: Path) -> HostRuntime:
         raise AssertionError(f"doctor must not build an Agent runtime for {cwd}")
 
+    async def unexpected_model_probe(config) -> None:
+        raise AssertionError(f"standard doctor must not probe the Model: {config}")
+
+    async def unexpected_mcp_probe(config, cwd: Path) -> McpProbeResult:
+        raise AssertionError(f"standard doctor must not start MCP from {cwd}: {config}")
+
     monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
     monkeypatch.setattr("phi.cli.main._model_discovery", discover_models)
     monkeypatch.setattr("phi.cli.main._runtime_factory", unexpected_runtime)
+    monkeypatch.setattr("phi.cli.main._model_probe", unexpected_model_probe)
+    monkeypatch.setattr("phi.cli.main._mcp_probe", unexpected_mcp_probe)
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert "Doctor" in result.stdout
-    assert "Status" in result.stdout
-    assert "Check" in result.stdout
-    assert result.stdout.index("settings") < result.stdout.index("model-discovery")
-    assert result.stdout.index("model-discovery") < result.stdout.index("default-model")
-    assert result.stdout.count("PASS") == 3
+    assert "Phi doctor" in result.stdout
+    assert "Configuration" in result.stdout
+    assert "Workspace" in result.stdout
+    assert "Model gateway" in result.stdout
+    assert result.stdout.index("Settings") < result.stdout.index("Model discovery")
+    assert result.stdout.index("Model discovery") < result.stdout.index("Default Model available")
+    assert result.stdout.count("PASS") == 12
+    assert "Phi is ready to start a Run." in result.stdout
     assert result.stderr == ""
     assert len(discovered_configs) == 1
     assert list(settings.session_dir.glob("*.metadata.json")) == []
 
 
 def test_doctor_missing_credentials_skips_dependent_checks(monkeypatch, tmp_path: Path) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     settings = _settings(tmp_path).model_copy(update={"api_key": SecretStr("")})
     discovery_called = False
 
@@ -1207,13 +1228,17 @@ def test_doctor_missing_credentials_skips_dependent_checks(monkeypatch, tmp_path
 
     assert result.exit_code == 1
     assert result.stdout.count("FAIL") == 1
-    assert result.stdout.count("SKIP") == 2
-    assert all(name in result.stdout for name in ("settings", "model-discovery", "default-model"))
-    assert "PHI_API_KEY is required" in result.stderr
+    assert result.stdout.count("SKIP") == 3
+    assert all(
+        name in result.stdout for name in ("Model settings", "Model discovery", "Default Model")
+    )
+    assert "PHI_API_KEY is required" in result.stdout
+    assert result.stderr == ""
     assert discovery_called is False
 
 
 def test_doctor_rejects_invalid_base_url_before_network(monkeypatch, tmp_path: Path) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     settings = _settings(tmp_path).model_copy(update={"base_url": "not-a-url"})
     discovery_called = False
 
@@ -1230,12 +1255,14 @@ def test_doctor_rejects_invalid_base_url_before_network(monkeypatch, tmp_path: P
 
     assert result.exit_code == 1
     assert "FAIL" in result.stdout
-    assert "settings" in result.stdout
-    assert "PHI_BASE_URL must be an absolute HTTP(S) URL" in result.stderr
+    assert "Model settings" in result.stdout
+    assert "PHI_BASE_URL must be an absolute HTTP(S) URL" in result.stdout
+    assert result.stderr == ""
     assert discovery_called is False
 
 
 def test_doctor_rejects_invalid_timeout_before_network(monkeypatch, tmp_path: Path) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     settings = _settings(tmp_path).model_copy(update={"request_timeout_seconds": float("inf")})
     discovery_called = False
 
@@ -1252,8 +1279,9 @@ def test_doctor_rejects_invalid_timeout_before_network(monkeypatch, tmp_path: Pa
 
     assert result.exit_code == 1
     assert "FAIL" in result.stdout
-    assert "settings" in result.stdout
-    assert "PHI_REQUEST_TIMEOUT_SECONDS must be finite and positive" in result.stderr
+    assert "Model settings" in result.stdout
+    assert "PHI_REQUEST_TIMEOUT_SECONDS must be finite and positive" in result.stdout
+    assert result.stderr == ""
     assert discovery_called is False
 
 
@@ -1261,6 +1289,7 @@ def test_doctor_redacts_known_credential_from_discovery_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     secret = "arbitrary-provider-secret-value"
     settings = _settings(tmp_path).model_copy(update={"api_key": SecretStr(secret)})
 
@@ -1274,19 +1303,22 @@ def test_doctor_redacts_known_credential_from_discovery_failure(
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 1
-    assert result.stdout.count("PASS") == 1
+    assert result.stdout.count("PASS") == 9
     assert result.stdout.count("FAIL") == 1
-    assert result.stdout.count("SKIP") == 1
-    assert all(name in result.stdout for name in ("settings", "model-discovery", "default-model"))
+    assert result.stdout.count("SKIP") == 2
+    assert all(name in result.stdout for name in ("Settings", "Model discovery", "Default Model"))
+    assert secret not in result.stdout
     assert secret not in result.stderr
-    assert "[REDACTED]" in result.stderr
-    assert "Traceback" not in result.stderr
+    assert "[REDACTED]" in result.stdout
+    assert "Traceback" not in result.stdout
+    assert result.stderr == ""
 
 
 def test_doctor_reports_protocol_failure_and_missing_or_unavailable_default(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     settings = _settings(tmp_path)
 
     async def malformed(config):
@@ -1311,22 +1343,26 @@ def test_doctor_reports_protocol_failure_and_missing_or_unavailable_default(
 
     assert malformed_result.exit_code == 1
     assert "FAIL" in malformed_result.stdout
-    assert "model-discovery" in malformed_result.stdout
-    assert "Model registry data must be a list" in malformed_result.stderr
+    assert "Model discovery" in malformed_result.stdout
+    assert "Model registry data must be a list" in malformed_result.stdout
+    assert malformed_result.stderr == ""
     assert unavailable.exit_code == 1
     assert "FAIL" in unavailable.stdout
-    assert "default-model" in unavailable.stdout
-    assert "Model 'model-a' is not available" in unavailable.stderr
+    assert "Default Model available" in unavailable.stdout
+    assert "model-a is not available" in unavailable.stdout
+    assert unavailable.stderr == ""
     assert missing.exit_code == 1
     assert "FAIL" in missing.stdout
-    assert "default-model" in missing.stdout
-    assert "PHI_DEFAULT_MODEL is required" in missing.stderr
+    assert "Default Model" in missing.stdout
+    assert "PHI_DEFAULT_MODEL is not configured" in missing.stdout
+    assert missing.stderr == ""
 
 
 def test_doctor_redacts_credential_shaped_unavailable_default_model(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
     secret_model = "sk-fake-secret-for-redaction"
     settings = _settings(tmp_path, default_model=secret_model)
 
@@ -1341,6 +1377,142 @@ def test_doctor_redacts_credential_shaped_unavailable_default_model(
 
     assert result.exit_code == 1
     assert "FAIL" in result.stdout
-    assert "default-model" in result.stdout
+    assert "Default Model" in result.stdout
+    assert secret_model not in result.stdout
     assert secret_model not in result.stderr
-    assert "Model '[REDACTED]' is not available" in result.stderr
+    assert "[REDACTED] is not available" in result.stdout
+    assert result.stderr == ""
+
+
+def test_doctor_json_is_versioned_complete_and_undecorated(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
+    settings = _settings(tmp_path)
+
+    async def discover_models(config):
+        del config
+        return [ModelInfo("model-a", max_input_tokens=128_000)]
+
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.main._model_discovery", discover_models)
+
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["schema_version"] == 1
+    assert document["mode"] == "standard"
+    assert document["healthy"] is True
+    assert len(document["checks"]) == 12
+    assert document["summary"] == {"fail": 0, "pass": 12, "skip": 0, "warn": 0}
+    assert document["environment"]["cwd"] == str(tmp_path)
+    assert "Phi doctor" not in result.stdout
+    assert "\x1b[" not in result.stdout
+    assert result.stderr == ""
+
+
+def test_doctor_verbose_shows_environment_and_success_timings(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
+    settings = _settings(tmp_path)
+
+    async def discover_models(config):
+        del config
+        return [ModelInfo("model-a", max_input_tokens=128_000)]
+
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.main._model_discovery", discover_models)
+
+    result = runner.invoke(app, ["doctor", "--verbose"])
+
+    assert result.exit_code == 0
+    assert all(label in result.stdout for label in ("Phi", "Python", "Platform", "Executable"))
+    assert "ms" in result.stdout
+    assert result.stderr == ""
+
+
+def test_doctor_deep_runs_explicit_probes_and_reports_the_mode(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
+    settings = _settings(tmp_path)
+    model_probes: list[str] = []
+    mcp_probes: list[Path] = []
+
+    async def discover_models(config):
+        del config
+        return [ModelInfo("model-a", max_input_tokens=128_000)]
+
+    async def probe_model(config) -> None:
+        model_probes.append(config.default_model)
+
+    async def probe_mcp(config, cwd: Path) -> McpProbeResult:
+        assert not config.servers
+        mcp_probes.append(cwd)
+        return McpProbeResult(0, (), ())
+
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.main._model_discovery", discover_models)
+    monkeypatch.setattr("phi.cli.main._model_probe", probe_model)
+    monkeypatch.setattr("phi.cli.main._mcp_probe", probe_mcp)
+
+    result = runner.invoke(app, ["doctor", "--deep"])
+
+    assert result.exit_code == 0
+    assert model_probes == ["model-a"]
+    assert mcp_probes == [tmp_path]
+    assert "Deep checks" in result.stdout
+    assert "Streaming Model request" in result.stdout
+    assert "No enabled servers" in result.stdout
+    assert result.stdout.count("PASS") == 14
+    assert result.stderr == ""
+
+
+def test_doctor_warning_is_successful(monkeypatch, tmp_path: Path) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
+    settings = _settings(tmp_path)
+
+    async def discover_models(config):
+        del config
+        return [ModelInfo("model-a")]
+
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.main._model_discovery", discover_models)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "WARN" in result.stdout
+    assert "Optional configuration needs attention" in result.stdout
+    assert result.stderr == ""
+
+
+def test_doctor_preserves_diagnostics_at_narrow_terminal_width(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _isolate_doctor_environment(monkeypatch, tmp_path)
+    settings = _settings(tmp_path)
+
+    async def failed_discovery(config):
+        del config
+        raise ModelProtocolError("registry diagnostic TAIL-MARKER")
+
+    monkeypatch.setattr("phi.cli.main._settings_factory", lambda: settings)
+    monkeypatch.setattr("phi.cli.main._model_discovery", failed_discovery)
+    _set_interactive_terminal(monkeypatch, columns="40", term="dumb")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "\x1b[" not in result.stdout
+    assert "FAIL  Model discovery" in result.stdout
+    assert "registrydiagnosticTAIL-MARKER" in "".join(result.stdout.split())
+    assert "Fix:" in result.stdout
+    assert all(len(line) <= 40 for line in result.stdout.splitlines())
+    assert result.stderr == ""
