@@ -63,20 +63,12 @@ async def request(
 写完之后,拿真实的课程 proxy 跑一次:
 
 ```bash
-uv run python -c "
-import asyncio
-from settings import load_settings
-from model import request
-
-async def main():
-    r = await request(load_settings(), [{'role': 'user', 'content': '说个笑话'}])
-    print(r)
-
-asyncio.run(main())
-"
+uv run scripts/check_model.py
 ```
 
-能看到一个 `content` 不是 `None` 的 `ModelResponse`,这一章就算通了。
+这个脚本是给好的,不用你写——它会测两条路径:一次不带 `tools` 参数的纯文本请求,一次带真实
+工具 schema 的请求。第二条路径专门用来确认 `tool_calls` 那条分支真的走通了(`function.arguments`
+从 JSON 字符串 `json.loads` 成 dict 这一步很容易漏),不要只满足于第一条能跑通。
 
 ## 对照阅读:看看 Phi 怎么做
 

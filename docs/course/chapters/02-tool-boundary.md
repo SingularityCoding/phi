@@ -59,22 +59,11 @@ async def dispatch(registry: ToolRegistry, call: ToolCall, *, timeout_seconds=30
 不接模型,直接测 `dispatch()` 本身:
 
 ```bash
-uv run python -c "
-import asyncio
-from model import ToolCall
-from tools import BUILTIN_TOOLS, ToolRegistry, dispatch
-
-async def main():
-    registry = ToolRegistry(BUILTIN_TOOLS)
-    print(await dispatch(registry, ToolCall(id='1', name='nope', arguments={})))
-    print(await dispatch(registry, ToolCall(id='2', name='read_file', arguments={})))
-    print(await dispatch(registry, ToolCall(id='3', name='read_file', arguments={'path': 'main.py'})))
-
-asyncio.run(main())
-"
+uv run scripts/check_tools.py
 ```
 
-三行输出应该分别是 `unknown_tool`、`invalid_arguments`、真实文件内容。
+这个脚本也是给好的,依次跑三种情况——不存在的工具名、缺必填参数、真实的文件读取——每种情况后面
+带一个断言,输出不对会直接报错,不用你自己盯着三行 print 判断对不对。
 
 ## 对照阅读:看看 Phi 怎么做
 
