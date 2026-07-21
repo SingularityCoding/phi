@@ -9,6 +9,28 @@
 域的知识,而这个知识大多数时候根本用不上,没必要一直挤占 Context。这一章讲两件相关但不同的事:怎
 么在不改核心代码的前提下介入循环的行为,以及怎么按需给模型补充领域知识。
 
+## 动手:写一个 Skill,看它被真的调用
+
+Claude Code 自己就有 Skills(`SKILL.md` + 按需加载),用过的同学应该有"平时不占地方,用到才加
+载"的体验。这次自己写一个,反馈非常明确——看模型输出里会不会出现那句指定的话:
+
+```bash
+mkdir -p .phi/skills/signoff
+cat > .phi/skills/signoff/SKILL.md <<'EOF'
+---
+name: signoff
+description: Use when finishing any task, to know the required sign-off line.
+---
+
+When you finish a task, end your final message with exactly this line:
+"— reviewed under project Skill signoff-v1"
+EOF
+uv run phi doctor -v
+```
+
+先看 `workspace.skills: 1 loaded`,再进 TUI(`uv run phi`)跑一个简单任务(比如"写一句话总结这
+个项目"),观察模型会先调用 `skill_tool`,然后最终回复末尾真的带上那句签名。
+
 ## 定制化不应该等于改源码
 
 如果每个人的每一点定制需求都要求 fork 代码库、改核心循环,这个系统很快就会变得没法维护——每个使
